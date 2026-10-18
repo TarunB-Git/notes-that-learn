@@ -1,0 +1,14 @@
+Write notes in a chat-style inbox, then find them in category boards or your to-do list.
+
+• Suggest categories locally and correct them with your own labels.
+• Create categories and private notebooks.
+• Save recordings and attachments alongside your notes.
+• Use reminders and a home-screen task widget.
+• Keep an editable Markdown folder or export an encrypted backup.
+• Protect the app with your device screen lock.
+
+No account or classification server. Optional English speech transcription and MiniLM sentence models download only when requested, then run on your phone.
+
+The F-Droid build excludes Google translation and OCR tools.
+
+Requires Android 11 or newer and an ARM64 device.

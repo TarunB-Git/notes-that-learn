@@ -38,6 +38,61 @@ class ChatUiTest {
         call(activity,"render"); layout(root)
         return activity to root
     }
+    @Test fun optionalToolsMatchTheBuildEvenWithImportedGooglePreferences() {
+        val (activity,root)=fixture("mods")
+        val state=ChatState(categories,messages,preferences=Preferences(autoTranslate=true,ocr=true))
+        field(activity,"shown",state); field(activity,"engine",ChatEngine(state)); call(activity,"render"); layout(root)
+        val labels=descendants(root).filterIsInstance<TextView>().map { it.text.toString() }
+        assertEquals(Mods.available,labels.contains("OCR · image text"))
+        assertEquals(Mods.available,labels.contains("Automatic translation"))
+        assertEquals(Mods.available,labels.contains("Translation downloads"))
+        assertTrue(labels.contains("Voice transcription")); assertTrue(labels.contains("Reminders"))
+        if(!Mods.available) {
+            assertTrue(labels.any { it.contains("Translation and OCR are not included") })
+            assertFalse(GuidePages.steps.any { it.text.contains("sends SDK usage metrics") })
+            // Restored preferences cannot cause an automatic Google operation.
+            val translate=MainActivity::class.java.getDeclaredMethod("translateMessage",Message::class.java,Boolean::class.javaPrimitiveType).apply { isAccessible=true }
+            translate.invoke(activity,messages.first(),false)
+        }
+    }
+    @Test fun settingsShowNativeSwitchesAndOnlyTheirControlsRequestChanges() {
+        val (activity,root)=fixture("settings:display")
+        val inbox=descendants(root).filterIsInstance<com.google.android.material.switchmaterial.SwitchMaterial>().single()
+        assertFalse(inbox.isChecked); assertEquals("Include private chats in Inbox",inbox.contentDescription.toString())
+        capture(root,"display-switches")
+        val form=LinearLayout(activity)
+        val requested=mutableListOf<Boolean>()
+        val method=MainActivity::class.java.getDeclaredMethod("toggleSetting",LinearLayout::class.java,String::class.java,String::class.java,Boolean::class.javaPrimitiveType,kotlin.jvm.functions.Function1::class.java).apply { isAccessible=true }
+        method.invoke(activity,form,"Example setting","Read this description",false,{ value:Boolean->requested.add(value); Unit })
+        descendants(form).filterIsInstance<TextView>().first { it.text.toString()=="Example setting" }.performClick()
+        assertTrue(requested.isEmpty())
+        val control=descendants(form).filterIsInstance<com.google.android.material.switchmaterial.SwitchMaterial>().single()
+        control.performClick(); assertEquals(listOf(true),requested)
+        assertFalse(control.isChecked)
+        form.removeAllViews()
+        method.invoke(activity,form,"Example setting","Saved setting",true,{ value:Boolean->requested.add(value); Unit })
+        descendants(form).filterIsInstance<com.google.android.material.switchmaterial.SwitchMaterial>().single().performClick()
+        assertEquals(listOf(true,false),requested)
+    }
+    @Test fun longNotesKeepListRenderingBoundedAndReaderPagesReachTheOriginalEnding() {
+        val (activity,root)=fixture()
+        val text="a".repeat(50000)+"END-OF-NOTE"
+        val note=Message(id="long",text=text)
+        val state=ChatState(categories,listOf(note))
+        field(activity,"shown",state); field(activity,"engine",ChatEngine(state)); call(activity,"render"); layout(root)
+        assertTrue(descendants(root).filterIsInstance<MessageText>().single().text.length<=TEXT_PREVIEW_CHARS+2)
+        descendants(root).first { it.contentDescription=="Read full note" }.performClick()
+        val dialogs=MainActivity::class.java.getDeclaredField("dialogs").apply { isAccessible=true }.get(activity) as List<*>
+        val reader=dialogs.single() as android.app.Dialog
+        val content=descendants(reader.window!!.decorView).first { it.tag=="long-note-reader" }
+        val next=descendants(content).first { it.contentDescription=="Next note page" }
+        repeat(TextPages.count(text)-1) { next.performClick() }
+        assertTrue(descendants(content).filterIsInstance<MessageText>().single().text.toString().endsWith("END-OF-NOTE"))
+        assertFalse(next.isEnabled)
+        assertEquals(text,(MainActivity::class.java.getDeclaredField("shown").apply { isAccessible=true }.get(activity) as ChatState).messages.single().text)
+        capture(reader.window!!.decorView,"long-note-reader")
+        descendants(content).first { it.contentDescription=="Close full note" }.performClick()
+    }
     @Test fun sentBubblesReachTheRightEdgeAndStayWithinPhoneWidth() {
         val (_,root)=fixture()
         val wrappers=descendants(root).filterIsInstance<ReplySwipe>()
@@ -549,8 +604,91 @@ class ChatUiTest {
         assertTrue(descendants(root).filterIsInstance<TextView>().any { it.text.toString()=="Editing note" })
         capture(root,"notes-editor")
         editor.setText("A revised observation")
-        call(activity,"cancelEdit"); layout(root)
-        assertTrue(descendants(root).filterIsInstance<MessageText>().any { it.text.toString()==messages.first().text })
+        call(activity,"cancelEdit"); settle(activity); layout(root)
+        assertTrue(descendants(root).filterIsInstance<MessageText>().any { it.text.toString()=="A revised observation" })
+    }
+    private fun settle(activity:MainActivity) {
+        val worker=MainActivity::class.java.getDeclaredField("worker").apply { isAccessible=true }.get(activity) as java.util.concurrent.ExecutorService
+        worker.submit {}.get(10,java.util.concurrent.TimeUnit.SECONDS)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+    }
+    private fun notesEditor():Triple<MainActivity,LinearLayout,android.widget.EditText> {
+        val (activity,root)=fixture("thoughts")
+        val state=ChatState(categories,messages.map { if(it.id=="thought")it.copy(approved=true,manual=true) else it },preferences=Preferences(frontend="notes"))
+        field(activity,"shown",state); field(activity,"engine",ChatEngine(state)); call(activity,"render"); layout(root)
+        descendants(root).filterIsInstance<MessageText>().first { it.text.contains("city feels") }.performClick(); layout(root)
+        return Triple(activity,root,descendants(root).filterIsInstance<android.widget.EditText>().single())
+    }
+    @Test fun notesAutosaveWaitsForIdleKeepsTheEditorAndSavesBeforeNavigation() {
+        val (activity,root,input)=notesEditor()
+        var saved:ChatState?=null
+        field(activity,"persistState",{ state:ChatState -> saved=state; Unit })
+        input.setText("A new observation"); input.setSelection(3)
+        val looper=org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper())
+        looper.idleFor(java.time.Duration.ofMillis(699)); assertNull(saved)
+        looper.idleFor(java.time.Duration.ofMillis(1)); settle(activity)
+        assertEquals("A new observation",saved!!.messages.first().text)
+        assertEquals("thoughts",saved!!.messages.first().category)
+        assertFalse(saved!!.messages.first().approved)
+        assertEquals("Edited · confirm category.",saved!!.messages.first().reason)
+        assertSame(input,descendants(root).filterIsInstance<android.widget.EditText>().single())
+        assertEquals(3,input.selectionStart)
+        input.setText("Latest edit before leaving")
+        MainActivity::class.java.getDeclaredMethod("navigate",String::class.java).apply { isAccessible=true }.invoke(activity,"home")
+        settle(activity)
+        assertEquals("Latest edit before leaving",saved!!.messages.first().text)
+    }
+    @Test fun failedAutosaveRetainsTheEditableDraftAndDoneCannotDiscardIt() {
+        val (activity,root,input)=notesEditor()
+        field(activity,"persistState",{ _:ChatState -> error("Storage full") })
+        input.setText("Keep this unsaved draft")
+        call(activity,"saveEdit"); settle(activity)
+        assertSame(input,descendants(root).filterIsInstance<android.widget.EditText>().single())
+        assertEquals("Keep this unsaved draft",input.text.toString())
+        val engine=MainActivity::class.java.getDeclaredField("engine").apply { isAccessible=true }.get(activity) as ChatEngine
+        assertEquals(messages.first().text,engine.state.messages.first().text)
+        field(activity,"persistState",{ _:ChatState -> Unit })
+        call(activity,"saveEdit"); settle(activity); layout(root)
+        assertEquals("Keep this unsaved draft",engine.state.messages.first().text)
+        assertNull(MainActivity::class.java.getDeclaredField("editTarget").apply { isAccessible=true }.get(activity))
+        assertTrue(descendants(root).filterIsInstance<MessageText>().any { it.text.toString()=="Keep this unsaved draft" })
+    }
+    @Test fun notesTodoTextUsesTheAutosavingEditorAndReturnsToTheChecklist() {
+        val (activity,root)=fixture("todos")
+        val state=ChatState(categories,messages,preferences=Preferences(frontend="notes"))
+        field(activity,"shown",state); field(activity,"engine",ChatEngine(state)); call(activity,"render"); layout(root)
+        MainActivity::class.java.getDeclaredMethod("editMessage",Message::class.java).apply { isAccessible=true }.invoke(activity,messages.first { it.id=="task" })
+        layout(root)
+        val input=descendants(root).filterIsInstance<android.widget.EditText>().single()
+        assertEquals("Download books for the flight.",input.text.toString())
+        input.setText("Download the library books")
+        call(activity,"flushNoteAutosave"); settle(activity)
+        call(activity,"saveEdit"); settle(activity); layout(root)
+        val task=descendants(root).filterIsInstance<TodoRow>().single()
+        assertEquals("Download the library books",task.text.text.toString())
+        task.performClick(); settle(activity)
+        val engine=MainActivity::class.java.getDeclaredField("engine").apply { isAccessible=true }.get(activity) as ChatEngine
+        assertTrue(engine.state.messages.first { it.id=="task" }.done)
+    }
+    @Test fun blankAutosaveKeepsTheLastNoteAndBackgroundingFlushesAnEdit() {
+        val (activity,_,input)=notesEditor()
+        var saved:ChatState?=null
+        field(activity,"persistState",{ state:ChatState -> saved=state; Unit })
+        input.setText("   "); call(activity,"flushNoteAutosave"); settle(activity); assertNull(saved)
+        input.setText("Saved when backgrounded"); call(activity,"onPause"); settle(activity)
+        assertEquals("Saved when backgrounded",saved!!.messages.first().text)
+    }
+    @Test fun modeShortcutSwitchesBothWaysWithoutLosingNotebookDrafts() {
+        val (activity,root)=fixture("home")
+        val draft=ComposerDraft("An unsent message")
+        field(activity,"drafts",mutableMapOf("thoughts" to draft))
+        descendants(root).first { it.contentDescription=="Switch to Notes mode" }.performClick(); settle(activity); layout(root)
+        assertTrue(descendants(root).any { it is NoteBoard })
+        assertTrue(descendants(root).any { it.contentDescription=="Settings" })
+        descendants(root).first { it.contentDescription=="Switch to Chat mode" }.performClick(); settle(activity); layout(root)
+        assertFalse(descendants(root).any { it is NoteBoard })
+        val engine=MainActivity::class.java.getDeclaredField("engine").apply { isAccessible=true }.get(activity) as ChatEngine
+        assertEquals(draft,engine.state.drafts["thoughts"])
     }
     @Test fun homeSwipeSwitchesTabsButLeavesBoardPreviewAndVerticalGesturesAlone() {
         val (activity,root)=fixture("home")

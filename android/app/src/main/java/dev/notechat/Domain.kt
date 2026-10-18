@@ -1,11 +1,15 @@
 package dev.notechat
 
 import java.util.Locale
+import java.security.MessageDigest
 import java.util.UUID
 
 const val ARCHIVE_DELAY_MS = 24L * 60 * 60 * 1000
 
 const val RETENTION_MS = 90L * 24 * 60 * 60 * 1000
+const val MAX_MESSAGE_CHARS = 1_000_000
+const val TEXT_PREVIEW_CHARS = 6_000
+const val CLASSIFICATION_CHARS = 12_000
 
 data class Category(val id: String, val title: String, val description: String,
                     val examples: List<String> = emptyList(), val pinned: Boolean = false, val icon: String? = null, val photo: Attachment? = null)
@@ -27,7 +31,7 @@ data class TrainingReport(val confirmed: Int, val heldOut: Int, val baseline: Do
                           val adopted: Boolean, val timestamp: Long = System.currentTimeMillis())
 data class PersonalHead(val signature: String, val weights: List<List<Float>>, val bias: List<Float>)
 data class Preferences(val preserveImportDates: Boolean = false, val appearance: String = "system", val widgetWhenLocked: Boolean = false, val classification: Boolean = true, val frontend: String = "chat",
-                       val autoTranslate: Boolean = false, val targetLanguage: String = "en", val ocr: Boolean = false, val reminders: Boolean = false, val includePrivateChatsInInbox: Boolean = false)
+                       val autoTranslate: Boolean = false, val targetLanguage: String = "en", val ocr: Boolean = false, val reminders: Boolean = false, val includePrivateChatsInInbox: Boolean = false, val colorTheme: String = "classic")
 data class MarkdownState(val tree: String? = null, val baseline: Map<String, String> = emptyMap(), val synced: Long = 0, val pendingExternal: Map<String,String> = emptyMap(), val pendingRendered: Map<String,String> = emptyMap())
 
 fun Message.completedArchived(now: Long = System.currentTimeMillis()) = done && completedAt != null && now - completedAt >= ARCHIVE_DELAY_MS
@@ -42,6 +46,8 @@ data class ChatState(val categories: List<Category>, val messages: List<Message>
                      val model: PersonalHead? = null, val splits: Map<String, String> = emptyMap(),
                      val draft: String = "", val replyDraft: String? = null, val preferences: Preferences = Preferences(), val navigation: Navigation = Navigation(), val markdown: MarkdownState = MarkdownState(), val chats: List<Chat> = emptyList(), val importedArchives: Set<String> = emptySet(), val quiz: Quiz? = null, val editDraftId: String? = null, val preEditDraft: String = "", val drafts: Map<String,ComposerDraft> = emptyMap(), val locations: Map<String,Navigation> = emptyMap(), val guide: GuideProgress = GuideProgress(), val homeTab: String = "home")
 data class Suggestion(val category: String?, val reason: String)
+
+fun textIdentity(text: String) = MessageDigest.getInstance("SHA-256").digest(normalized(text).toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
 
 fun normalized(text: String) = text.trim().replace(Regex("\\s+"), " ").lowercase(Locale.ROOT)
 
@@ -79,7 +85,7 @@ class ChatEngine(var state: ChatState) {
     }
     fun active() = state.messages.filter { it.deleted == null }
     fun confirmed() = active().filter { it.approved && it.trainable() && it.category != null }
-        .asReversed().distinctBy { normalized(it.text) }
+        .asReversed().distinctBy { textIdentity(it.text) }
     fun update(id: String, action: (Message) -> Message) {
         require(state.messages.any { it.id == id }) { "Message no longer exists" }
         val old = state.messages.first { it.id == id }
@@ -104,9 +110,10 @@ class ChatEngine(var state: ChatState) {
         require(category == null || state.categories.any { c -> c.id == category })
         it.copy(category = category, chatId = null, approved = category != null, rejected = emptySet(), manual = true, reason = if(category==null)"Category removed." else "Category confirmed by you.")
     }
-    fun edit(id: String, text: String) = update(id) {
-        require(text.isNotBlank() && text.length <= 20000)
-        it.copy(text = text, category = if(it.trainable())null else it.category, approved = false, rejected = emptySet(), edited = true, manual = if(it.trainable())false else it.manual)
+    fun edit(id: String, text: String, keepCategory: Boolean = false) = update(id) {
+        require(text.isNotBlank() && text.length <= MAX_MESSAGE_CHARS)
+        it.copy(text = text, category = if(it.trainable() && !keepCategory)null else it.category, approved = false, rejected = emptySet(), edited = true, manual = if(it.trainable())false else it.manual,
+            reason = if(keepCategory && it.trainable())"Edited · confirm category." else it.reason)
     }
     fun complete(id: String, done: Boolean, now: Long = System.currentTimeMillis()) = update(id) {
         require(it.deleted == null && it.category == "todos")
@@ -122,7 +129,7 @@ class ChatEngine(var state: ChatState) {
     fun split(id: String, parts: List<String>): List<Message> {
         val original = active().first { it.id == id }
         require(original.attachment == null) { "Split text messages only" }
-        require(parts.isNotEmpty() && parts.all { it.isNotBlank() && it.length <= 20000 })
+        require(parts.isNotEmpty() && parts.all { it.isNotBlank() && it.length <= MAX_MESSAGE_CHARS })
         val replacements = parts.mapIndexed { index, text -> original.copy(
             id = if (index == 0) id else UUID.randomUUID().toString(), text = text,
             category = null, approved = false, rejected = emptySet(), manual = false,
@@ -136,8 +143,8 @@ class ChatEngine(var state: ChatState) {
         require(records.size >= 2 && records.size == ids.size) { "Select at least two active messages" }
         require(records.map { it.chatId }.distinct().size==1) { "Merge messages from the same chat" }
         require(records.all { it.attachment == null }) { "Merge text messages only; attachments must stay separate" }
+        require(records.sumOf { it.text.length.toLong() } + (records.size-1)*2L <= MAX_MESSAGE_CHARS) { "Merged text exceeds 1,000,000 characters" }
         val text = records.joinToString("\n\n") { it.text }
-        require(text.length <= 20000) { "Merged text exceeds 20,000 characters" }
         val first = records.first()
         val merged = first.copy(text = text, category = null, approved = false, rejected = emptySet(),
             manual = false, edited = true, reason = "", done = false, completedAt = null,

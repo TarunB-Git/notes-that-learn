@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f5ef">
+  <meta name="description" content="Android notes with local classification. Try the browser demo.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; worker-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <title>Note Chat — Notes, ideas and to-dos</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.mjs"></script>
+</head>
+<body>
+  <svg class="svg-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+    <symbol id="i-diagonal" viewBox="0 0 24 24"><path d="M6 18 18 6M6 6h12v12"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="m4 4 17 8-17 8 3-8-3-8Zm3 8h14"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24"><path d="M4 11a8 8 0 1 1 2 6M4 5v6h6"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 6v1"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4L12 3Z"/></symbol>
+    <symbol id="i-note" viewBox="0 0 24 24"><path d="M5 3h14v18H5zM9 8h6m-6 4h6m-6 4h3"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-14-2 18"/></symbol>
+  </defs></svg>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header wrap" id="top">
+    <a class="brand" href="#top" aria-label="Note Chat home"><img src="icon.svg" width="35" height="35" alt=""><span>note chat<span class="brand-dot">.</span></span></a>
+    <nav aria-label="Main navigation"><a href="#demo">Try it</a><a href="#learning">How it learns</a><a href="#engineering">The build</a></nav>
+    <div class="header-downloads"><a class="header-download" href="https://github.com/TarunB-Git/note-processing/releases/tag/v1.5.0">GitHub <svg><use href="#i-diagonal"/></svg></a><a class="header-download fdroid-link" href="#fdroid-release">F-Droid release <svg><use href="#i-diagonal"/></svg></a></div>
+  </header>
+  <main id="main">
+    <section class="hero wrap" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <h1 id="hero-title">For everything<br>on your <em>mind.</em><svg class="thought-stroke" viewBox="0 0 250 25" aria-hidden="true"><path d="M3 15C60 4 165 2 244 11M30 22c71-11 148-12 196-7"/></svg></h1>
+        <p class="hero-description">Auto-organize your notes in a familiar format.</p>
+        <div class="hero-actions"><a class="button button-dark" href="#demo" id="try-link">Try a note <svg><use href="#i-arrow"/></svg></a><a class="quiet-link" href="#learning">How it works <svg><use href="#i-diagonal"/></svg></a></div>
+        <div class="hero-reassurance"><svg><use href="#i-lock"/></svg><span>Local classification. No account needed.</span></div>
+
+      </div>
+      <div class="hero-demo" id="demo">
+        <div class="demo-caption"><span class="live-dot"></span> INTERACTIVE BROWSER DEMO</div>
+        <div class="phone-shell">
+          <div class="phone-screen">
+          <div class="device-status" aria-hidden="true"><span>9:41</span><span class="device-camera"></span><span class="device-signals"><svg viewBox="0 0 20 14"><path d="M2 11V9m4 2V6m4 5V3m4 8V0"/></svg><svg viewBox="0 0 24 14"><rect x="1" y="2" width="19" height="10" rx="2"/><path d="M23 5v4M4 5h13v4H4z"/></svg></span></div>
+          <div class="phone-header"><div class="demo-avatar"><img src="icon.svg" width="28" height="28" alt=""></div><div><strong>Note Chat</strong><span id="engine-status">Loading the classifier…</span></div><button class="icon-button reset-demo" title="Reset the demo" aria-label="Reset demo"><svg><use href="#i-reset"/></svg></button></div>
+          <div class="view-switch" role="group" aria-label="Notebook view"><button data-view="inbox" aria-pressed="true">Inbox</button><button data-view="boards" aria-pressed="false">Boards</button><button data-view="todos" aria-pressed="false">To-do</button></div>
+          <div class="note-area" id="note-area" aria-label="Demo notes"><p class="loading-copy">Loading sample notes…</p></div>
+          <div class="demo-composer">
+            <div class="example-buttons"><span>Examples:</span><button data-example="What if the library hosted a seed exchange?">An idea <span>↗</span></button><button data-example="Remember to book the train.">A to-do <span>↗</span></button></div>
+            <form id="note-form"><label class="sr-only" for="note-input">Write a note to classify</label><textarea id="note-input" rows="1" maxlength="2000" placeholder="What's on your mind?" disabled></textarea><button class="send-button" type="submit" disabled aria-label="Send and classify note"><svg><use href="#i-send"/></svg></button></form>
+            <p class="composer-caption">Temporary notes · browser demo. <button id="about-demo">What’s included?</button></p>
+          </div>
+          <div class="device-home" aria-hidden="true"><span></span></div>
+          </div>
+        </div>
+        <div class="demo-result" id="demo-result"><svg><use href="#i-spark"/></svg><span>Type a note to try the classifier.</span></div>
+        <span class="demo-decoration" aria-hidden="true">✳</span>
+      </div>
+    </section>
+
+
+
+    <section class="learning-section wrap" id="learning" aria-labelledby="learning-title">
+      <div class="learning-copy"><p class="eyebrow light">TRY A CORRECTION</p><h2 id="learning-title">Choose the<br><em>category.</em></h2><p>This note could be a question or an idea.</p></div>
+      <div class="learning-lab"><div class="lab-header"><span class="lab-icon"><svg><use href="#i-spark"/></svg></span><span>CORRECT A SUGGESTION</span><span id="memory-count">0 confirmed</span></div><blockquote>Why not build a seed exchange?</blockquote><div class="lab-step"><span class="step-marker">1</span><div><span class="field-label">Suggested category</span><strong id="lab-before">Getting a suggestion…</strong></div></div><div class="lab-step"><span class="step-marker">2</span><div class="lab-teach"><label class="field-label" for="lab-category">Your category</label><div><select id="lab-category" aria-label="Your intended category"><option value="ideas">Ideas</option><option value="questions">Questions</option><option value="todos">To-do</option><option value="thoughts">Thoughts</option><option value="work">Work</option></select><button id="teach-note" disabled>Save label <svg><use href="#i-arrow"/></svg></button></div></div></div><div class="lab-outcome" id="lab-outcome"><span class="outcome-icon">↳</span><p>Save a label to see how example memory works.</p></div><p class="lab-limit">This demo remembers exact examples. Android can also train a personal classifier.</p><button class="lab-reset" id="reset-learning">Reset this demo’s labels</button></div>
+    </section>
+
+    <section class="evidence-strip wrap" aria-label="Checks and known issues"><div><span class="evidence-date">VERIFIED 18 OCTOBER 2026</span><h2>Checks and known issues</h2><p>Owner reports phone checks passed on Samsung · Android 16. New controls need a short retest; F-Droid review is pending.</p></div><div class="evidence-number"><strong>127</strong><span>Android tests passed</span></div><div class="evidence-number"><strong>7</strong><span>Desktop tests passed</span></div><div class="evidence-actions"><a href="https://github.com/TarunB-Git/note-processing/blob/main/docs/release-readiness.md">Read the review <svg><use href="#i-diagonal"/></svg></a><a class="report-button" href="https://github.com/TarunB-Git/note-processing/issues/new?template=bug_report.yml">Report a problem <svg><use href="#i-diagonal"/></svg></a></div></section>
+
+    <section class="engineering-section wrap" id="engineering" aria-labelledby="engineering-title"><div class="section-heading"><div><p class="eyebrow">HOW IT WORKS</p><h2 id="engineering-title">Follow a note.</h2></div><p>Choose a step to see what happens.</p></div><div class="system-flow" role="group" aria-label="Explore a note’s journey"><button data-step="capture" class="flow-node active" aria-pressed="true"><span>01</span><strong>Capture</strong><svg><use href="#i-note"/></svg></button><span class="flow-connector" aria-hidden="true">→</span><button data-step="classify" class="flow-node" aria-pressed="false"><span>02</span><strong>Classify</strong><svg><use href="#i-spark"/></svg></button><span class="flow-connector" aria-hidden="true">→</span><button data-step="confirm" class="flow-node" aria-pressed="false"><span>03</span><strong>Confirm</strong><svg><use href="#i-check"/></svg></button><span class="flow-connector" aria-hidden="true">→</span><button data-step="keep" class="flow-node" aria-pressed="false"><span>04</span><strong>Keep</strong><svg><use href="#i-lock"/></svg></button></div><div class="system-detail" id="system-detail" aria-live="polite"></div></section>
+
+    <section class="android-section wrap" aria-labelledby="android-title"><div class="android-shots"><a href="assets/android-inbox.png" target="_blank" rel="noopener" class="screenshot-one" aria-label="Open full Android Inbox screenshot"><img src="assets/android-inbox.png" width="1179" height="2490" loading="lazy" alt="The native Android Inbox with a thought, idea, task, and voice recording"></a><a href="assets/android-notes.png" target="_blank" rel="noopener" class="screenshot-two" aria-label="Open full Android boards screenshot"><img src="assets/android-notes.png" width="1179" height="2490" loading="lazy" alt="The native Android Notes layout with Inbox and category boards"></a></div><div class="android-copy"><p class="eyebrow">THE NATIVE ANDROID APP</p><h2 id="android-title">A notebook that<br>comes <em>with you.</em></h2><p>The Android app also supports voice recordings, images and other media, private notebooks, and app lock.<br>There’s a to-do widget too!</p><p>It also supports editable Markdown files and optional speech transcription.</p><div class="download-options"><a class="button button-dark" href="https://github.com/TarunB-Git/note-processing/releases/tag/v1.5.0">Download · GitHub <svg><use href="#i-diagonal"/></svg></a><a class="button button-outline" href="#fdroid-release">F-Droid release <svg><use href="#i-diagonal"/></svg></a></div><p class="release-caption">v1.5.0 · Android 11+ · ARM64</p><div id="fdroid-release" class="fdroid-status" tabindex="-1"><strong>F-Droid release · in preparation</strong><p>The Google-free build is being tested. A store listing is not available yet.</p><a href="https://github.com/TarunB-Git/note-processing/blob/main/docs/fdroid-release.md">Release progress <svg><use href="#i-diagonal"/></svg></a></div></div></section>
+
+
+  </main>
+  <footer class="site-footer wrap"><a href="#top" class="brand"><img src="icon.svg" width="30" height="30" alt=""><span>note chat.</span></a><p>Android notebook · Apache 2.0</p><div><a href="https://github.com/TarunB-Git/note-processing">Source on GitHub <svg><use href="#i-diagonal"/></svg></a><button id="privacy-link">Demo & privacy</button></div></footer>
+  <div class="toast" role="status" id="toast"></div><p id="announce" class="sr-only" aria-live="polite"></p>
+  <dialog id="demo-dialog"><button class="dialog-close icon-button" aria-label="Close demo information">×</button><p class="eyebrow">ABOUT THIS DEMO</p><h2>About the demo</h2><p>Try the built-in classifier, change a category, or complete a task. Everything runs in this tab. Reloading clears your notes and labels.</p><p>No account, analytics or inference API. The page loads static files from its host; the host may keep normal request logs.</p><p>This is a browser demo. Android adds MiniLM, personal classifier training, encrypted storage, files and media. Limits here: 2,000 characters per note, 20 notes and 100 saved labels.</p><a href="https://github.com/TarunB-Git/note-processing/blob/main/docs/engineering.md">Explore the engineering <svg><use href="#i-diagonal"/></svg></a></dialog>
+  <noscript><div class="noscript">The interactive notebook needs JavaScript. You can still explore the Android release and engineering links.</div></noscript>
+</body>
+</html>

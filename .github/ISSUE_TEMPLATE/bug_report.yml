@@ -1,0 +1,64 @@
+name: Bug report
+description: Report an Android or desktop problem with reproducible steps.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Note Chat. Check the [known release gaps](https://github.com/TarunB-Git/note-processing/blob/main/docs/release-readiness.md) first.
+        Use invented example notes. This report is public: omit personal notes, recordings, backup passwords, and signing keys.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Where does the problem happen?
+      options:
+        - Android app
+        - Desktop organizer
+        - Build or documentation
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: App version or Git commit
+      description: For Android, find the installed version in Android Settings → Apps → Note Chat.
+      placeholder: "For example: v1.5.0 APK, or a short commit ID"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Device and system
+      description: Android version and phone model, or desktop OS and Python version. Include emulator/16 KB mode if relevant.
+      placeholder: "For example: Pixel 8, Android 16"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include a short invented example if the problem depends on a note, label, or import.
+      placeholder: |
+        1. Open ...
+        2. Enter ...
+        3. Tap ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the error text or a screenshot with private content removed, if useful.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Relevant settings or other context
+      description: For example, MiniLM installed, app lock enabled, folder sync connected, or permissions denied. Do not attach a personal workspace.

@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <application android:label="Note Chat Preview" tools:replace="android:label">
+        <receiver android:name="dev.notechat.TodoWidget" android:label="Note Chat Preview To-do" tools:replace="android:label" />
+    </application>
+</manifest>

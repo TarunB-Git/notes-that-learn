@@ -13,7 +13,16 @@ jobs:
       - run: python -m pip install ./desktop
       - run: python -m unittest discover -s desktop/tests
       - run: node --check desktop/src/note_processing/web/app.js
+      - name: Check browser showcase
+        run: |
+          node showcase/build.mjs
+          node showcase/tests/classifier.test.mjs
+          node --check showcase/src/app.mjs
+          node --check showcase/src/classifier.worker.mjs
   android:
+    strategy:
+      matrix:
+        fdroid: ['false', 'true']
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -24,5 +33,15 @@ jobs:
           cache: gradle
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
       - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
-      - run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+      - run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug -Pfdroid=${{ matrix.fdroid }}
         working-directory: android
+      - name: Verify native library compatibility
+        run: python3 distribution/check-native-libraries.py android/app/build/outputs/apk/debug/app-debug.apk
+      - name: Build and inspect unsigned F-Droid release
+        if: matrix.fdroid == 'true'
+        run: |
+          cd android
+          ./gradlew :app:assembleRelease -Pfdroid=true
+          cd ..
+          python3 distribution/fdroid/check-apk.py android/app/build/outputs/apk/release/app-release-unsigned.apk
+          python3 distribution/check-native-libraries.py android/app/build/outputs/apk/release/app-release-unsigned.apk

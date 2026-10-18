@@ -59,20 +59,33 @@ jobs:
           trap 'rm -f "$ANDROID_KEYSTORE_PATH"' EXIT
           umask 077
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
-          ./gradlew :app:assembleRelease :app:bundleRelease --no-daemon
+          ./gradlew :app:assembleRelease :app:bundleRelease --no-daemon --max-workers=1
+          mkdir -p ../release-assets
+          cp app/build/outputs/apk/release/app-release.apk "../release-assets/note-chat-$RELEASE_TAG-arm64.apk"
+          cp app/build/outputs/bundle/release/app-release.aab "../release-assets/note-chat-$RELEASE_TAG.aab"
+          # Distributions share app/build; compile the free release from clean outputs.
+          ./gradlew :app:clean -Pfdroid=true --no-daemon --max-workers=1
+          ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleRelease -Pfdroid=true --no-daemon --max-workers=1
+          python3 ../distribution/fdroid/check-apk.py app/build/outputs/apk/release/app-release-unsigned.apk
+          bash ../distribution/fdroid/sign-release.sh app/build/outputs/apk/release/app-release-unsigned.apk "../release-assets/note-chat-$RELEASE_TAG-fdroid-arm64.apk"
       - name: Verify version, signature, and package assets
         run: |
           set -euo pipefail
           tools="$ANDROID_HOME/build-tools/35.0.0"
-          apk="android/app/build/outputs/apk/release/app-release.apk"
+          apk="release-assets/note-chat-$RELEASE_TAG-arm64.apk"
           version=$("$tools/aapt" dump badging "$apk" | sed -n "s/^package:.*versionName='\([^']*\)'.*/\1/p")
           [[ "$RELEASE_TAG" == "v$version" ]] || { echo 'Tag must match Android versionName.'; exit 1; }
           "$tools/apksigner" verify --verbose --print-certs "$apk"
-          jarsigner -verify android/app/build/outputs/bundle/release/app-release.aab > "$RUNNER_TEMP/bundle-verification.txt"
+          jarsigner -verify "release-assets/note-chat-$RELEASE_TAG.aab" > "$RUNNER_TEMP/bundle-verification.txt"
           grep -Fq 'jar verified.' "$RUNNER_TEMP/bundle-verification.txt"
-          mkdir -p release-assets
-          cp "$apk" "release-assets/note-chat-$RELEASE_TAG-arm64.apk"
-          cp android/app/build/outputs/bundle/release/app-release.aab "release-assets/note-chat-$RELEASE_TAG.aab"
+          free_apk="release-assets/note-chat-$RELEASE_TAG-fdroid-arm64.apk"
+          free_version=$("$tools/aapt" dump badging "$free_apk" | sed -n "s/^package:.*versionName='\([^']*\)'.*/\1/p")
+          [[ "$version" == "$free_version" ]] || { echo 'Distribution versions differ.'; exit 1; }
+          "$tools/apksigner" verify --verbose --print-certs "$free_apk"
+          python3 distribution/check-native-libraries.py "$apk"
+          python3 distribution/check-native-libraries.py "$free_apk"
+          "$tools/zipalign" -c -P 16 4 "$apk"
+          "$tools/zipalign" -c -P 16 4 "$free_apk"
           cd release-assets
           sha256sum *.apk *.aab > SHA256SUMS.txt
       - name: Create draft release

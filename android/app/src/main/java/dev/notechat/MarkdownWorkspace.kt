@@ -74,7 +74,7 @@ object MarkdownWorkspace {
             state.messages.firstOrNull { it.id == id }?.attachment?.let { text = text.replace(mediaLink(it), "").trim() }
             val checkbox = Regex("^- \\[([ xX])][ \\t]?").find(text)
             if (category == "todos" && checkbox != null) text = text.substring(checkbox.range.last + 1)
-            require(text.length <= 20000) { "A Markdown message exceeds 20,000 characters" }
+            require(text.length <= MAX_MESSAGE_CHARS) { "A Markdown message exceeds 1,000,000 characters" }
             entries.add(Entry(id, text, category, category == "todos" && checkbox?.groupValues?.get(1)?.lowercase() == "x",chatId))
             offset = endIndex + end.length
         }
@@ -83,7 +83,7 @@ object MarkdownWorkspace {
         // Unmarked paragraphs appended in an editor become new messages; fenced code stays together.
         val pending = StringBuilder(); var fence: String? = null
         fun flush() { val text = pending.toString().trim(); if (text.isNotEmpty()) {
-            require(text.length <= 20000)
+            require(text.length <= MAX_MESSAGE_CHARS)
             val check = Regex("^- \\[([ xX])][ \\t]?").find(text)
             entries.add(Entry(null,if (category == "todos" && check != null) text.substring(check.range.last+1) else text,category,category == "todos" && check?.groupValues?.get(1)?.lowercase()=="x",chatId))
         }; pending.clear() }

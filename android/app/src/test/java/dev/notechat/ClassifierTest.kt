@@ -5,6 +5,22 @@ import org.junit.Test
 
 class ClassifierTest {
     private val classes=listOf(Category("ideas","Ideas","Proposals",listOf("We could open a bookstore","What if the roof was a garden")),Category("todos","To-do","Actions",listOf("Download books for the flight","Book the dentist")),Category("questions","Questions","Questions",listOf("Why does this happen?","How does it work?")))
+    @Test fun longNotesUseBoundedEncoderInputButFullTextForApprovedMatches() {
+        var largest=0
+        val encoder=object:SentenceEncoder {
+            override val identity="fixture"
+            override fun encode(text:String):FloatArray { largest=maxOf(largest,text.length); return FloatArray(384) }
+        }
+        val prefix="A long observation. ".repeat(4000)
+        val idea=Message(text=prefix+"First ending",category="ideas",approved=true)
+        val task=Message(text=prefix+"Second ending",category="todos",approved=true)
+        val classifier=TextClassifier(encoder)
+        classifier.configure(classes,listOf(idea,task))
+        assertEquals("ideas",classifier.classify(idea).category)
+        assertEquals("todos",classifier.classify(task).category)
+        assertNotEquals("Matches a message you approved.",classifier.classify(Message(text=prefix+"Unapproved ending")).reason)
+        assertTrue(largest<=CLASSIFICATION_CHARS)
+    }
     @Test fun exactApprovedBoundaryBeatsStarterCuesAndRejectionSkipsIt() {
         val classifier=TextClassifier(null)
         classifier.configure(classes,listOf(Message(text="Why this game",category="todos",approved=true),Message(text="What color is this? Website",category="ideas",approved=true)))

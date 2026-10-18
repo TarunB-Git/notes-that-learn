@@ -25,7 +25,11 @@ class MarkdownText(context:Context, open:(String)->Unit) {
             override fun configureConfiguration(builder:MarkwonConfiguration.Builder) { builder.linkResolver { _,link->open(link) } }
         }).build()
     fun render(view:MessageText, source:String, query:String, open:(String)->Unit) {
-        val output=SpannableStringBuilder(renderer.toMarkdown(source))
+        var end=source.length.coerceAtMost(TEXT_PREVIEW_CHARS)
+        if(end<source.length && end>0 && source[end-1].isHighSurrogate() && source[end].isLowSurrogate())end--
+        val excerpt=source.substring(0,end)
+        val output=SpannableStringBuilder(renderer.toMarkdown(excerpt))
+        if(source.length>excerpt.length)output.append("\n…")
         Regex("\\[\\[([^]\\n]+)]]").findAll(output.toString()).toList().asReversed().forEach { match ->
             val begin=match.range.first; val end=match.range.last+1
             val spans=output.getSpans(begin,end,Any::class.java)

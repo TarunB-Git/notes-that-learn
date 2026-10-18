@@ -49,7 +49,7 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import javax.crypto.Cipher
 
-class MainActivity : Activity() {
+class MainActivity : Activity(), UiColorSource {
     private val worker = Executors.newSingleThreadExecutor()
     private val modWorker = Executors.newSingleThreadExecutor()
     private lateinit var vault: Vault
@@ -204,7 +204,8 @@ class MainActivity : Activity() {
             if(recorder!=null || player!=null)handler.postDelayed(this,160)
         }
     }
-    private val colors get() = UiColors(isDark(),shown?.preferences?.frontend=="notes")
+    private val colors get() = UiColors(isDark(),shown?.preferences?.frontend=="notes",shown?.preferences?.colorTheme ?: "classic")
+    override val uiColors get() = colors
     private val green get() = colors.accent
     private val paper get() = colors.paper
     private val ink get() = colors.ink
@@ -316,7 +317,12 @@ class MainActivity : Activity() {
         outState.putInt("index",location.index); outState.putInt("offset",location.offset); outState.putInt("scroll",location.scroll)
         super.onSaveInstanceState(outState)
     }
+    override fun onPause() {
+        flushNoteAutosave()
+        super.onPause()
+    }
     override fun onStop() {
+        flushNoteAutosave()
         super.onStop(); resumed=false; sessionGeneration++; autoUnlockAttempted=false; handler.removeCallbacks(archiveTick); handler.removeCallbacks(markdownTick); handler.removeCallbacks(projections); pendingChanges.clear(); cancelSplit(false); activeOverflow?.dismiss(); activeOverflow=null
         stopPlayback()
         if (recorder != null) stopRecording(send=false)
@@ -437,7 +443,7 @@ class MainActivity : Activity() {
         pendingChanges.forEach { pending -> runCatching { pending.preview(preview) } }
         return preview.state
     }
-    private fun fast(train: Boolean=false, success: (() -> Unit)?=null, preview: (ChatEngine)->Unit, commit: (ChatEngine)->Unit=preview) {
+    private fun fast(train: Boolean=false, refresh: Boolean=true, success: (() -> Unit)?=null, preview: (ChatEngine)->Unit, commit: (ChatEngine)->Unit=preview) {
         val base=shown ?: return
         val optimistic=ChatEngine(base)
         try { preview(optimistic) } catch(error:Exception) { tell(error.message ?: "Cannot change this message"); return }
@@ -445,7 +451,7 @@ class MainActivity : Activity() {
         val ui=sessionState(base)
         val id=++changeId; val generation=sessionGeneration
         pendingChanges.add(PendingChange(id,preview)); shown=optimistic.state
-        refreshMessages()
+        if(refresh)refreshMessages()
         worker.execute {
             val current=engine ?: return@execute
             val before=current.state
@@ -465,7 +471,7 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     pendingChanges.removeAll { it.id==id }
                     if(generation==sessionGeneration && resumed && shown!=null) {
-                        shown=projectPending(state); refreshMessages(); success?.invoke()
+                        shown=projectPending(state); if(refresh)refreshMessages(); success?.invoke()
                         scheduleIdleSave()
                     }
                 }
@@ -474,7 +480,7 @@ class MainActivity : Activity() {
                 if(train)configure()
                 runOnUiThread {
                     pendingChanges.removeAll { it.id==id }
-                    if(generation==sessionGeneration && resumed && shown!=null) { shown=projectPending(before); refreshMessages(); tell(error.message ?: "Change was not saved") }
+                    if(generation==sessionGeneration && resumed && shown!=null) { shown=projectPending(before); if(refresh) { refreshMessages(); tell(error.message ?: "Change was not saved") } else toast("Autosave failed: ${error.message ?: "storage unavailable"}. Your edit is still open.") }
                 }
             }
         }
@@ -666,10 +672,11 @@ class MainActivity : Activity() {
         dialog(if(repeated)"Backup already imported" else "Restore backup?").setOnCancelListener { restored.close() }.setMessage("${restored.state.messages.size} messages, ${restored.state.chats.size} private chats. $duplicate messages already exist and will be skipped. An empty workspace also restores preferences, approvals, and model weights.")
             .setNegativeButton("Cancel") { _,_->restored.close() }.setPositiveButton("Restore · skip duplicates") { _,_->work("Backup restored",onFailure={ restored.close() }) {
                 try {
+                    val merged=BackupArchive.merge(engine!!.state,restored)
                     BackupArchive.attachments(restored.state).forEach { attachment ->
                         if(!vault.hasMedia(attachment))restored.media.getValue(attachment.file).inputStream().use { vault.importMedia(it,attachment.name,attachment.mime,attachment.duration,attachment.file) }
                     }
-                    engine!!.state=BackupArchive.merge(engine!!.state,restored); configure()
+                    engine!!.state=merged; configure()
                 } finally { restored.close() }
             } }.showTracked()
     }
@@ -903,7 +910,7 @@ class MainActivity : Activity() {
             if(task!=null)work("") { engine!!.complete(id,!task.done) }
         }
         pendingWidgetJump?.let { id -> pendingWidgetJump=null; pendingJump=id; render() }
-        pendingText?.let { text->navigate("all"); draft=text.take(20000); pendingText=null; render() }
+        pendingText?.let { text->navigate("all"); draft=text; pendingText=null; render() }
         pendingUri?.let { uri -> pendingUri=null; val mime=contentResolver.getType(uri).orEmpty(); val name=contentResolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME),null,null,null)?.use { if(it.moveToFirst())it.getString(0) else "" }.orEmpty(); if(isZip(uri))importZip(uri) else if(mime.startsWith("text/") || name.endsWith(".md",true) || name.endsWith(".txt",true))importText(uri) else importUri(uri) }
         pendingTextUri?.let { uri->pendingTextUri=null; if(isZip(uri))importZip(uri) else importText(uri) }
         pendingFolder?.let { uri->pendingFolder=null; connectFolder(uri) }
@@ -928,6 +935,7 @@ class MainActivity : Activity() {
     private fun navigate(destination:String) {
         if(recorder!=null) { toast("Send or cancel the recording first"); return }
         if(destination!=route) {
+            flushNoteAutosave()
             rememberDraft()
             cancelSplit(false)
             stopPlayback()
@@ -943,7 +951,11 @@ class MainActivity : Activity() {
         val state=shown ?: return
         val keepFocus=editor?.hasFocus()==true
         val cursor=editor?.selectionEnd ?: 0
+        val oldColors=renderedColors
+        val themeChanged=oldColors!=null && oldColors!=colors
+        if(themeChanged)draft=editor?.text?.toString() ?: draft
         applyAppearance()
+        renderedColors=colors
         renderedArchives=archiveIds(state); renderedPins=pinIds(state)
         if(renderedRoute.isNotBlank() && (list!=null || root.childCount>0))positions[renderedRoute]=capturePosition()
         val changed=route!=renderedRoute
@@ -971,7 +983,18 @@ class MainActivity : Activity() {
             alpha=0f; translationX=dp(if(backwards)-20 else 28).toFloat()
             animate().alpha(1f).translationX(0f).setDuration(190).setInterpolator(DecelerateInterpolator()).start()
         }
+        if(themeChanged && android.animation.ValueAnimator.areAnimatorsEnabled()) {
+            // Fade the new palette in over its previous surface; respect Android's animation setting.
+            window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(oldColors!!.surface))
+            root.alpha=0f
+            root.animate().alpha(1f).setDuration(180).withEndAction { window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(colors.surface)) }.start()
+        }
         renderedRoute=route
+    }
+    private var renderedColors: UiColors?=null
+    private fun switchFrontend() {
+        val next=if(shown?.preferences?.frontend=="notes")"chat" else "notes"
+        fast(preview={ it.state=it.state.copy(preferences=it.state.preferences.copy(frontend=next)) })
     }
     private fun home(state:ChatState) {
         val privateTab=route=="chats"
@@ -979,6 +1002,7 @@ class MainActivity : Activity() {
         val bar=row().apply { setPadding(dp(16),dp(8),dp(8),dp(8)) }
         bar.addView(label(if(privateTab)"Chats" else if(state.preferences.frontend=="notes")"All notes" else "Note Chat",25,if(state.preferences.frontend=="notes")ink else green,true),LinearLayout.LayoutParams(0,dp(48),1f))
         bar.addView(icon("add",if(privateTab)"New private chat" else "Add category") { if(privateTab)newChat() else editCategory(null) }.apply { setTag(R.id.guide_target,if(privateTab)"new-chat" else "add-category") })
+        bar.addView(icon("switch",if(state.preferences.frontend=="notes")"Switch to Chat mode" else "Switch to Notes mode") { switchFrontend() })
         bar.addView(icon("settings","Settings") { navigate("settings") })
         bar.addView(icon("more","More options") { homeMenu() }.also { overflowAnchor=it })
         root.addView(bar)
@@ -1017,7 +1041,7 @@ class MainActivity : Activity() {
                 val middle=column()
                 middle.addView(label(title,17,ink,true))
                 val last=messages.lastOrNull()
-                middle.addView(label(last?.text?.ifBlank { last.attachment?.name.orEmpty() } ?: if(id=="all")"Send yourself a message" else "No messages yet",14,muted).apply { maxLines=1; ellipsize=android.text.TextUtils.TruncateAt.END; setPadding(0,dp(6),0,0) })
+                middle.addView(label(last?.text?.take(TEXT_PREVIEW_CHARS)?.ifBlank { last.attachment?.name.orEmpty() } ?: if(id=="all")"Send yourself a message" else "No messages yet",14,muted).apply { maxLines=1; ellipsize=android.text.TextUtils.TruncateAt.END; setPadding(0,dp(6),0,0) })
                 item.addView(middle,LinearLayout.LayoutParams(0,-2,1f))
                 val right=column().apply { gravity=Gravity.END }
                 right.addView(label(last?.let { time(it.created) } ?: "",11,muted))
@@ -1061,7 +1085,7 @@ class MainActivity : Activity() {
     } }.filter { !includeSearch || query.isBlank() || it.text.contains(query,true) || it.attachment?.name?.contains(query,true)==true }
     private fun title(state:ChatState)=when(route) { "all"->"Inbox"; "starred"->"Starred"; "unsorted"->"Unsorted"; else->state.chats.firstOrNull { "chat:${it.id}"==route }?.title ?: state.categories.firstOrNull { it.id==route }?.title ?: "Inbox" }
     private fun conversation(state:ChatState) {
-        if(route=="todos" && !searchMode) { todoList(state); return }
+        if(route=="todos" && !searchMode && !(state.preferences.frontend=="notes" && editTarget!=null)) { todoList(state); return }
         val current=messages(state,false)
         selected.retainAll(current.map { it.id }.toSet())
         if(selected.isNotEmpty()) selectionToolbar(state)
@@ -1120,11 +1144,12 @@ class MainActivity : Activity() {
             }
             else->{ val media=row(); media.addView(icon("attach","Open ${a.name}") { if(selected.isNotEmpty())toggleSelection(message.id) else openAttachment(message) }); media.addView(label(a.name,15,ink).apply { maxLines=2 },LinearLayout.LayoutParams(0,-2,1f)); body.addView(media,LinearLayout.LayoutParams(width-dp(18),-2)) }
         } }
+        if(notes && editTarget==message.id)body.addView(label("Autosave on · tap ✓ when finished",12,muted))
         if(notes && editTarget==message.id)body.addView(EditText(this).apply {
             textSize=18f; setTextColor(ink); background=null; setText(draft); pendingCaret?.let { caret->setSelection(caret.coerceIn(0,length())); pendingCaret=null }; minLines=3
             inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             setPadding(0,dp(8),0,dp(8)); setTag(R.id.guide_target,"composer")
-            addTextChangedListener(watcher { draft=it }); editor=this
+            addTextChangedListener(watcher { draft=it; scheduleNoteAutosave() }); editor=this; scheduleNoteAutosave()
         },LinearLayout.LayoutParams(-1,-2))
         else if(message.text.isNotBlank())body.addView(MessageText(this@MainActivity) { if(!recovering)tagging(message) }.apply {
             textSize=if(notes)18f else 16f; setTextColor(ink); immediateTap=notes || selected.isNotEmpty(); setPadding(0,dp(3),0,dp(5)); maxWidth=width-dp(18)
@@ -1134,7 +1159,11 @@ class MainActivity : Activity() {
             setOnClickListener { if(selected.isNotEmpty())toggleSelection(message.id) else if(notes)editMessage(message) }
             if(!recovering)setOnLongClickListener { toggleSelection(message.id); true }
         })
-        message.translation?.takeIf { it!=message.text }?.let { translated -> body.addView(label("Translation\n$translated",14,muted).apply { setPadding(0,dp(6),0,dp(6)) }) }
+        if(message.text.length>TEXT_PREVIEW_CHARS)body.addView(action("Read full note",{ if(selected.isNotEmpty())toggleSelection(message.id) else readLongNote(message) },false))
+        message.translation?.takeIf { it!=message.text }?.let { translated ->
+            body.addView(label("Translation\n${translated.take(TEXT_PREVIEW_CHARS)}",14,muted).apply { setPadding(0,dp(6),0,dp(6)) })
+            if(translated.length>TEXT_PREVIEW_CHARS)body.addView(action("Read full translation",{ readLongNote(message,translated) },false))
+        }
         val footer=row().apply { gravity=Gravity.CENTER_VERTICAL }
         val category=state.chats.firstOrNull { it.id==message.chatId }?.title ?: state.categories.firstOrNull { it.id==message.category }?.title ?: "Tag"
         footer.addView(label(category,if(notes)12 else 11,green).apply { setTag(R.id.guide_target,"tag"); setPadding(0,dp(4),dp(10),dp(4)); if(!recovering)setOnClickListener { if(selected.isNotEmpty())toggleSelection(message.id) else tagging(message) } },LinearLayout.LayoutParams(0,-2,1f))
@@ -1172,6 +1201,35 @@ class MainActivity : Activity() {
         setTag(R.id.guide_target,"forward")
         setOnClickListener { forwardAction(if(selected.isNotEmpty())shown!!.messages.filter { it.id in selected } else listOf(message)) }
         setOnLongClickListener { toggleSelection(message.id); true }
+    }
+    private fun readLongNote(message: Message, source: String=message.text) {
+        val reader=Dialog(this,if(isDark())R.style.AppThemeDark else R.style.AppTheme)
+        val content=column().apply { tag="long-note-reader"; setBackgroundColor(colors.surface) }
+        val bar=row().apply { setPadding(dp(4),dp(4),dp(4),dp(4)) }
+        bar.addView(icon("back","Close full note") { reader.dismiss() })
+        bar.addView(label(if(source==message.text)"Full note" else "Full translation",19,ink,true),LinearLayout.LayoutParams(0,-2,1f))
+        if(message.deleted==null && source==message.text)bar.addView(icon("edit","Edit full note") { reader.dismiss(); editMessage(message) })
+        content.addView(bar)
+        val scroll=ScrollView(this)
+        val text=MessageText(this).apply { textSize=18f; setTextColor(ink); setPadding(dp(20),dp(12),dp(20),dp(20)); linkMenu=::linkActions }
+        scroll.addView(text); content.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
+        val pages=TextPages.count(source)
+        var page=if(query.isBlank())0 else (source.indexOf(query,ignoreCase=true).coerceAtLeast(0)/TextPages.PAGE_CHARS).coerceAtMost(pages-1)
+        val controls=row().apply { setPadding(dp(8),dp(4),dp(8),dp(4)) }
+        val previous=icon("up","Previous note page") {}; val next=icon("down","Next note page") {}
+        val count=label("",14,muted).apply { gravity=Gravity.CENTER }
+        controls.addView(previous); controls.addView(count,LinearLayout.LayoutParams(0,-2,1f)); controls.addView(next); content.addView(controls)
+        fun showPage() {
+            markdown.render(text,TextPages.page(source,page),query,::openLink)
+            count.text=getString(R.string.note_page_number,page+1,pages)
+            previous.isEnabled=page>0; next.isEnabled=page<pages-1
+            previous.alpha=if(previous.isEnabled)1f else .35f; next.alpha=if(next.isEnabled)1f else .35f
+            scroll.scrollTo(0,0)
+        }
+        previous.setOnClickListener { if(page>0) { page--; showPage() } }
+        next.setOnClickListener { if(page<pages-1) { page++; showPage() } }
+        showPage(); reader.setContentView(content); trackDialog(reader); reader.show(); reader.window?.setLayout(-1,-1)
+        if(::vault.isInitialized && vault.lockedStorage)reader.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
     }
     private fun composer(state:ChatState) {
         val box=column().apply { setBackgroundColor(paper); setPadding(dp(7),dp(5),dp(7),dp(7)) }
@@ -1217,14 +1275,14 @@ class MainActivity : Activity() {
         if(recordingLocked)recordButton?.gesturesEnabled=false
     }
     private fun sendText(text:String) {
-        if(text.isBlank() || text.length>20000) { tell("Messages must contain text and fit within 20,000 characters"); return }
+        if(text.isBlank() || text.length>MAX_MESSAGE_CHARS) { tell("Messages must contain text and fit within 1,000,000 characters"); return }
         val category=shown?.categories?.firstOrNull { it.id==route }?.id
         val chat=route.removePrefix("chat:").takeIf { route.startsWith("chat:") }
         val message=Message(text=text.trim(),replyTo=reply,category=category,chatId=chat,manual=category!=null,approved=category!=null)
         followLatest=list?.canScrollVertically(1)!=true
         draft=""; reply=null; editor?.setText("")
         val add: (ChatEngine)->Unit={ current -> current.state=current.state.copy(messages=current.state.messages+message) }
-        fast(train=category!=null,success={ if(shown?.preferences?.autoTranslate==true)translateMessage(message,false) },preview=add,commit={ current ->
+        fast(train=category!=null,success={ if(Mods.available && shown?.preferences?.autoTranslate==true)translateMessage(message,false) },preview=add,commit={ current ->
             val suggestion=if(category!=null)Suggestion(category,"Confirmed by sending to this category") else predict(message)
             val scheduled=if(current.state.preferences.reminders && suggestion.category=="todos")ReminderTime.detect(message.text) else null
             current.state=current.state.copy(messages=current.state.messages+message.copy(category=suggestion.category,reason=suggestion.reason,remindAt=scheduled))
@@ -1276,8 +1334,8 @@ class MainActivity : Activity() {
             options["Edit"]={ clearSelection(); editMessage(message) }
             if(message.attachment==null)options["Split message"]={ startSplit(message) }
             if(message.attachment?.mime?.startsWith("audio/")==true)options["Transcribe voice message"]={ clearSelection(); transcribe(message) }
-            if(message.attachment?.mime?.startsWith("image/")==true)options["Extract text (OCR)"]={ clearSelection(); extractText(message) }
-            if(message.text.isNotBlank())options["Translate"]={ clearSelection(); translateMessage(message) }
+            if(Mods.available && message.attachment?.mime?.startsWith("image/")==true)options["Extract text (OCR)"]={ clearSelection(); extractText(message) }
+            if(Mods.available && message.text.isNotBlank())options["Translate"]={ clearSelection(); translateMessage(message) }
             options["Set reminder"]={ clearSelection(); setReminder(message) }
             if(message.remindAt!=null)options["Remove reminder"]={ clearSelection(); fast(preview={ it.update(message.id) { record->record.copy(remindAt=null) } }) }
             options["Why this tag?"]={ tell(message.reason.ifBlank { "Manually tagged attachment." }) }
@@ -1317,8 +1375,41 @@ class MainActivity : Activity() {
         render()
         root.post { editor?.let { field -> field.requestFocus(); (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(field,InputMethodManager.SHOW_IMPLICIT) } }
     }
-    private fun cancelEdit() { editTarget=null; draft=editPreviousDraft; editPreviousDraft=""; render() }
+    private fun cancelEdit() { if(shown?.preferences?.frontend=="notes") { saveEdit(); return }; handler.removeCallbacks(noteAutosave); editTarget=null; draft=editPreviousDraft; editPreviousDraft=""; render() }
+    private val noteAutosave=Runnable { flushNoteAutosave() }
+    private fun scheduleNoteAutosave() {
+        handler.removeCallbacks(noteAutosave)
+        if(shown?.preferences?.frontend=="notes" && editTarget!=null)handler.postDelayed(noteAutosave,700)
+    }
+    private fun flushNoteAutosave() {
+        handler.removeCallbacks(noteAutosave)
+        if(shown?.preferences?.frontend!="notes")return
+        val id=editTarget ?: return
+        val text=editor?.text?.toString() ?: draft
+        val note=shown?.messages?.firstOrNull { it.id==id } ?: return
+        if(text.isBlank() || text==note.text)return
+        // Rebinding the row here would interrupt typing and reset the caret.
+        // Keep its category while editing, and invalidate the old confirmed training label.
+        fast(train=true,refresh=false,preview={ it.edit(id,text,keepCategory=true) })
+    }
+    private fun finishNoteEdit() {
+        val id=editTarget ?: return
+        val text=editor?.text?.toString() ?: draft
+        flushNoteAutosave()
+        val generation=sessionGeneration
+        worker.execute {
+            val saved=text.isBlank() || engine?.state?.messages?.any { it.id==id && it.text==text }==true
+            runOnUiThread {
+                if(saved && generation==sessionGeneration && editTarget==id && (editor?.text?.toString() ?: draft)==text) {
+                    if(text.isBlank())toast("Empty edit: last saved note kept. Use Delete to remove it.")
+                    editTarget=null; draft=editPreviousDraft; editPreviousDraft=""; editor=null
+                    render(); saveSession()
+                }
+            }
+        }
+    }
     private fun saveEdit() {
+        if(shown?.preferences?.frontend=="notes") { finishNoteEdit(); return }
         val id=editTarget ?: return; val text=editor?.text?.toString() ?: draft
         if(text.isBlank())return
         editTarget=null; draft=editPreviousDraft; editPreviousDraft=""; editor=null
@@ -1397,7 +1488,14 @@ class MainActivity : Activity() {
             "settings:display"->{
                 setting(content,"Layout",if(state.preferences.frontend=="notes")"Notes · Inbox and two-column boards" else "Chat") { menu("Layout",listOf("Chat","Notes")) { choice->work("") { engine!!.state=engine!!.state.copy(preferences=engine!!.state.preferences.copy(frontend=if(choice==0)"chat" else "notes")) } } }
                 setting(content,"Appearance",state.preferences.appearance.replaceFirstChar { it.uppercase() }) { menu("Appearance",listOf("System","Light","Dark")) { index->work("") { engine!!.state=engine!!.state.copy(preferences=engine!!.state.preferences.copy(appearance=listOf("system","light","dark")[index])) } } }
-                setting(content,"Include private chats in Inbox",if(state.preferences.includePrivateChatsInInbox)"On · notes and private messages together" else "Off · private messages stay in Chats") { work("") { engine!!.state=engine!!.state.copy(preferences=engine!!.state.preferences.copy(includePrivateChatsInInbox=!state.preferences.includePrivateChatsInInbox)) } }
+                paletteSetting(content,"Theme colors",state.preferences.colorTheme) { key ->
+                    work("") { engine!!.state=engine!!.state.copy(preferences=engine!!.state.preferences.copy(colorTheme=key)) }
+                }
+                paletteSetting(content,"App icon color",LauncherIcons.selected(this)) { key ->
+                    try { LauncherIcons.select(this,key); render(); toast("Icon updated. Your launcher may take a moment to refresh.") }
+                    catch(error:Exception) { tell(error.message ?: "Could not update the launcher icon") }
+                }
+                toggleSetting(content,"Include private chats in Inbox","Show private messages alongside notes",state.preferences.includePrivateChatsInInbox) { enabled->work("") { engine!!.state=engine!!.state.copy(preferences=engine!!.state.preferences.copy(includePrivateChatsInInbox=enabled)) } }
                 setting(content,"To-do widget","Add a checklist to your Android home screen") { requestTodoWidget() }
             }
             "settings:data"->{
@@ -1406,16 +1504,16 @@ class MainActivity : Activity() {
                 setting(content,"Create encrypted backup","ZIP · messages, media, private chats, approvals, and personal head. Save to device or Drive.") { createBackup() }
                 setting(content,"Import / restore ZIP","Open a backup from device or Drive, or a WhatsApp export. Duplicate message IDs are detected.") { pickText() }
                 setting(content,"Import TXT / Markdown","Preview messages before importing") { pickText() }
-                setting(content,"Keep imported dates",if(state.preferences.preserveImportDates)"On · transcript dates" else "Off · use import time") { work("") { engine!!.state=engine!!.state.copy(preferences=engine!!.state.preferences.copy(preserveImportDates=!state.preferences.preserveImportDates)) } }
+                toggleSetting(content,"Keep imported dates","Use transcript dates instead of import time",state.preferences.preserveImportDates) { enabled->work("") { engine!!.state=engine!!.state.copy(preferences=engine!!.state.preferences.copy(preserveImportDates=enabled)) } }
                 setting(content,"Categories","Add, rename, change icons, or remove categories") { navigate("categories") }
             }
             "settings:privacy"->{
-                setting(content,"App lock",if(vault.lockedStorage)"Fingerprint or screen lock · locks when you leave" else "Off · private storage remains encrypted") {
-                    if(vault.lockedStorage)work("App lock disabled") { vault.disableLock(); runOnUiThread { privacy() } }
+                toggleSetting(content,"App lock","Fingerprint or screen lock · locks when you leave",vault.lockedStorage) { enabled->
+                    if(!enabled)work("App lock disabled") { vault.disableLock(); runOnUiThread { privacy() } }
                     else try { authenticate(vault.enableLockCipher()) { cipher->work("App lock enabled") { vault.finishWrapping(cipher,true); runOnUiThread { privacy() } } } } catch(_:Exception) { tell("Set up a fingerprint or device screen lock first") }
                 }
-                setting(content,"Show widget tasks while locked",if(state.preferences.widgetWhenLocked)"On · task text is visible on the home screen" else "Off · widget asks to unlock") { widgetVisibility(!state.preferences.widgetWhenLocked) }
-                content.addView(label("Notes are not sent to a classification server. Drive backups and WhatsApp forwarding use only destinations you choose. Optional Google ML Kit MODs process content on-device and send SDK performance/usage metrics to Google.",13,muted))
+                toggleSetting(content,"Show widget tasks while locked","Allow task text on the home screen while locked",state.preferences.widgetWhenLocked) { enabled->widgetVisibility(enabled) }
+                content.addView(label("Notes are not sent to a classification server. Drive backups and WhatsApp forwarding use only destinations you choose. " + if(Mods.available) "Optional Google ML Kit MODs process content on-device and send SDK performance/usage metrics to Google." else "This F-Droid build excludes Google translation and OCR SDKs. Optional speech and MiniLM models download only when requested.",13,muted))
             }
             else->{
                 setting(content,"Completed to-dos","${state.messages.count { it.deleted==null && it.completedArchived() }} archived · completed tasks move here after one day") { navigate("completed") }
@@ -1501,23 +1599,25 @@ class MainActivity : Activity() {
     private fun modsScreen(state: ChatState) {
         val content=settingsBody("MODs")
         setting(content,"Voice transcription",if(VoiceTranscriber.installed(this))"English model installed · transcribe from message options" else "Optional Vosk download · English · 40 MB") { speechSettings() }
-        setting(content,"OCR · image text",if(state.preferences.ocr)"Enabled · Latin script · extract from image options" else "Off · optional Google Play services model download") {
-            if(state.preferences.ocr)work("") { engine!!.state=engine!!.state.copy(preferences=engine!!.state.preferences.copy(ocr=false)) }
-            else modConsent("Enable OCR?") { runMod("Downloading OCR model…") { Mods.installOcr(this); runOnUiThread { if(resumed)work("OCR enabled") { engine!!.state=engine!!.state.copy(preferences=engine!!.state.preferences.copy(ocr=true)) } } } }
-        }
-        setting(content,"Automatic translation",if(state.preferences.autoTranslate)"On · original text is kept · target ${Locale.forLanguageTag(state.preferences.targetLanguage).displayLanguage}" else "Off · downloads language models as needed over Wi-Fi") {
-            val enable={ work("") { engine!!.state=engine!!.state.copy(preferences=engine!!.state.preferences.copy(autoTranslate=!state.preferences.autoTranslate)) } }
-            if(state.preferences.autoTranslate)enable() else modConsent("Enable automatic translation?") { enable() }
-        }
-        setting(content,"Translation language",Locale.forLanguageTag(state.preferences.targetLanguage).displayLanguage) { val languages=Mods.languages(); menu("Translate to",languages.map { Locale.forLanguageTag(it).displayLanguage }) { index->work("") { engine!!.state=engine!!.state.copy(preferences=engine!!.state.preferences.copy(targetLanguage=languages[index])) } } }
-        setting(content,"Translation downloads","Download or remove language models · roughly 30 MB per language") { translationDownloads() }
-        setting(content,"Reminders",if(state.preferences.reminders)"On · manual reminders and detected to-do times" else "Off · enable notifications for reminders") {
-            if(!state.preferences.reminders && android.os.Build.VERSION.SDK_INT>=33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS),21)
-            else work("") { engine!!.state=engine!!.state.copy(preferences=engine!!.state.preferences.copy(reminders=!state.preferences.reminders)) }
+        if(Mods.available) {
+            toggleSetting(content,"OCR · image text","Latin script · optional Google Play services model",state.preferences.ocr) { enabled->
+                if(!enabled)work("") { engine!!.state=engine!!.state.copy(preferences=engine!!.state.preferences.copy(ocr=false)) }
+                else modConsent("Enable OCR?") { runMod("Downloading OCR model…") { Mods.installOcr(this); runOnUiThread { if(resumed)work("OCR enabled") { engine!!.state=engine!!.state.copy(preferences=engine!!.state.preferences.copy(ocr=true)) } } } }
+            }
+            toggleSetting(content,"Automatic translation","Keep original text · translate to ${Locale.forLanguageTag(state.preferences.targetLanguage).displayLanguage}",state.preferences.autoTranslate) { enabled->
+                val save={ work("") { engine!!.state=engine!!.state.copy(preferences=engine!!.state.preferences.copy(autoTranslate=enabled)) } }
+                if(!enabled)save() else modConsent("Enable automatic translation?") { save() }
+            }
+            setting(content,"Translation language",Locale.forLanguageTag(state.preferences.targetLanguage).displayLanguage) { val languages=Mods.languages(); menu("Translate to",languages.map { Locale.forLanguageTag(it).displayLanguage }) { index->work("") { engine!!.state=engine!!.state.copy(preferences=engine!!.state.preferences.copy(targetLanguage=languages[index])) } } }
+            setting(content,"Translation downloads","Download or remove language models · roughly 30 MB per language") { translationDownloads() }
+        } else content.addView(label("F-Droid build · Translation and OCR are not included.",13,muted))
+        toggleSetting(content,"Reminders","Manual reminders and detected to-do times",state.preferences.reminders) { enabled->
+            if(enabled && android.os.Build.VERSION.SDK_INT>=33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS),21)
+            else work("") { engine!!.state=engine!!.state.copy(preferences=engine!!.state.preferences.copy(reminders=enabled)) }
         }
         setting(content,"Reminder notifications","Android notification permissions and alert settings") { startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,packageName)) }
         setting(content,"MiniLM sentence similarity",if(MiniLm.modelFile(this).exists())"Downloaded · optional classifier encoder" else "Optional 23 MB download · configure under Model & learning") { navigate("model") }
-        content.addView(label("OCR and translation require Google ML Kit; OCR and language identification require Google Play services. Transcription uses Vosk. The base classifier works without these MODs. Automatic time detection supports English dates/times; battery saving can delay reminders.",13,muted).apply { setPadding(0,dp(16),0,0) })
+        content.addView(label((if(Mods.available) "OCR and translation require Google ML Kit; OCR and language identification require Google Play services. " else "") + "Transcription uses Vosk. The base classifier works without these MODs. Automatic time detection supports English dates/times; battery saving can delay reminders.",13,muted).apply { setPadding(0,dp(16),0,0) })
     }
     private fun translationDownloads() {
         modConsent("Manage translation models?") { runMod("Reading language models…") {
@@ -1529,6 +1629,7 @@ class MainActivity : Activity() {
         } }
     }
     private fun translateMessage(message: Message, ask: Boolean=true) {
+        if(!Mods.available)return
         val state=shown ?: return
         val run={ runMod("Translating on this phone…",queued=!ask) {
             val translated=Mods.translate(this,message.text,state.preferences.targetLanguage)
@@ -1537,6 +1638,7 @@ class MainActivity : Activity() {
         if(ask && !state.preferences.autoTranslate)modConsent("Translate this message?") { run() } else run()
     }
     private fun extractText(message: Message) {
+        if(!Mods.available)return
         if(shown?.preferences?.ocr!=true) { navigate("mods"); toast("Enable OCR before extracting image text"); return }
         val attachment=message.attachment ?: return
         val file=File(cacheDir,"ocr-${UUID.randomUUID()}")
@@ -1546,7 +1648,7 @@ class MainActivity : Activity() {
                 val text=try { Mods.ocr(file) } finally { file.delete() }
                 runOnUiThread { if(resumed) {
                     if(text.isBlank())tell("No readable text found") else {
-                        val input=EditText(this).apply { setText(text.take(20000)); maxLines=8 }
+                        val input=EditText(this).apply { setText(text.take(MAX_MESSAGE_CHARS)); maxLines=8 }
                         dialog("Review extracted text").setView(input).setNegativeButton("Cancel",null).setPositiveButton("Save text") { _,_->
                             val reviewed=input.text.toString()
                             fast(train=true,preview={ current->current.update(message.id) { it.copy(text=reviewed,extracted=true,approved=false,edited=true) } },commit={ current ->
@@ -1577,7 +1679,7 @@ class MainActivity : Activity() {
         dialog("Test with 10 notes").setMessage("Predictions are frozen before you choose labels. Use notes the model has not already learned.").setView(input)
             .setNegativeButton("Cancel",null).setPositiveButton("Predict") { _,_->
                 val examples=input.text.toString().lines().map(String::trim).filter(String::isNotBlank)
-                if(examples.size!=10 || examples.distinctBy(::normalized).size!=10 || examples.any { it.length>20000 }) { tell("Enter ten different notes, one per line"); return@setPositiveButton }
+                if(examples.size!=10 || examples.distinctBy(::normalized).size!=10 || examples.any { it.length>MAX_MESSAGE_CHARS }) { tell("Enter ten different notes, one per line"); return@setPositiveButton }
                 work("",onSuccess={ navigate("quiz") }) {
                     configure()
                     val results=examples.map { text -> val start=System.nanoTime(); val category=predict(Message(text=text)).category; QuizItem(text,category,nanos=System.nanoTime()-start) }
@@ -1593,7 +1695,7 @@ class MainActivity : Activity() {
         content.addView(label("$answered/${quiz.items.size} labelled${score?.let { " · ${"%.0f".format(it*100)}% correct" } ?: ""}",22,ink,true))
         content.addView(label("Predictions were saved before your answers. This is a small personal check, not a general accuracy benchmark.",14,muted))
         quiz.items.forEachIndexed { index,item ->
-            setting(content,"${index+1}. ${item.text}","Model: ${state.categories.firstOrNull { it.id==item.prediction }?.title ?: "Unsorted"} · Your label: ${state.categories.firstOrNull { it.id==item.answer }?.title ?: "Choose"}") {
+            setting(content,"${index+1}. ${item.text.take(TEXT_PREVIEW_CHARS)}","Model: ${state.categories.firstOrNull { it.id==item.prediction }?.title ?: "Unsorted"} · Your label: ${state.categories.firstOrNull { it.id==item.answer }?.title ?: "Choose"}") {
                 menu("Your category",state.categories.map { it.title }) { choice -> fast(preview={ current -> val active=current.state.quiz ?: return@fast; current.state=current.state.copy(quiz=active.copy(items=active.items.mapIndexed { i,row->if(i==index)row.copy(answer=state.categories[choice].id) else row })) }) }
             }
         }
@@ -1619,9 +1721,8 @@ class MainActivity : Activity() {
     private fun modelScreen(state:ChatState) {
         toolbar("Model & learning","On this phone",{ navigate("settings") })
         val scroll=ScrollView(this); val content=column().apply { setPadding(dp(20),dp(12),dp(20),dp(24)) }; scroll.addView(content); root.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
-        setting(content,"Automatic classification",if(state.preferences.classification)"On · only category / inbox messages are classified" else "Off · private chats and manual organization still work") {
+        toggleSetting(content,"Automatic classification","Classify notes · private chats stay outside the model",state.preferences.classification) { enabled->
             work("") {
-                val enabled=!engine!!.state.preferences.classification
                 engine!!.state=engine!!.state.copy(preferences=engine!!.state.preferences.copy(classification=enabled))
                 encoder?.close(); encoder=null
                 if(enabled && MiniLm.modelFile(this).exists())encoder=MiniLm(this)
@@ -1952,6 +2053,7 @@ class MainActivity : Activity() {
             line.text.linkMenu=::linkActions
             line.footer.addView(label(time(m.created),11,muted).apply { setOnClickListener { tagging(m) } },LinearLayout.LayoutParams(0,-2,1f))
             line.footer.addView(action("Tag",{ if(selected.isEmpty())tagging(m) else toggleSelection(m.id) },false))
+            if(m.text.length>TEXT_PREVIEW_CHARS)line.footer.addView(action("Read full note",{ if(selected.isEmpty())readLongNote(m) else toggleSelection(m.id) },false))
             if(m.trainable()) {
                 line.footer.addView(action(if(m.approved)"👍 ✓" else "👍",{ approveMessages(setOf(m.id)) },false).apply { visibility=if(selected.isEmpty())View.VISIBLE else View.INVISIBLE })
                 line.footer.addView(action("👎",{ disapprove(m) },false).apply { visibility=if(selected.isEmpty())View.VISIBLE else View.INVISIBLE })
@@ -2140,6 +2242,41 @@ class MainActivity : Activity() {
         val box=column().apply { setPadding(dp(4),dp(16),dp(4),dp(16)) }; box.addView(label(title,17,ink,true)); box.addView(label(description,14,muted).apply { setPadding(0,dp(6),0,0) }); box.setOnClickListener { click() }; when(title) { "Layout"->"layout"; "Permanent Markdown folder"->"markdown"; "Create encrypted backup"->"backup"; "Voice transcription"->"speech"; "Test with 10 notes"->"test-model"; else->null }?.let { box.setTag(R.id.guide_target,it) }; parent.addView(box)
         parent.addView(View(this).apply { setBackgroundColor(colors.divider) },LinearLayout.LayoutParams(-1,dp(1)))
     }
+    private fun paletteSetting(parent:LinearLayout,title:String,current:String,select:(String)->Unit) {
+        parent.addView(label(title,17,ink,true).apply { setPadding(dp(4),dp(16),dp(4),dp(8)) })
+        parent.addView(label(if(title=="App icon color")"Home screen icon · ${ThemePalette.title(current)}" else "${ThemePalette.title(current)} · applies to Chat and Notes",13,muted))
+        val scroll=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false }
+        val choices=row()
+        ThemePalette.keys.forEach { key ->
+            val color=ThemePalette.colors[key] ?: Color.rgb(0,128,105)
+            val chip=label(if(current==key)"✓" else "",20,Color.WHITE,true).apply {
+                gravity=Gravity.CENTER; background=rounded(color,24); isSelected=current==key
+                contentDescription="$title: ${ThemePalette.title(key)}${if(current==key)", selected" else ""}"
+                isClickable=true; isFocusable=true; setOnClickListener { if(!busy)select(key) }
+            }
+            choices.addView(chip,LinearLayout.LayoutParams(dp(48),dp(48)).apply { rightMargin=dp(10) })
+        }
+        scroll.addView(choices); parent.addView(scroll,LinearLayout.LayoutParams(-1,dp(64)))
+        parent.addView(View(this).apply { setBackgroundColor(colors.divider) },LinearLayout.LayoutParams(-1,dp(1)))
+    }
+    private fun toggleSetting(parent:LinearLayout,title:String,description:String,checked:Boolean,change:(Boolean)->Unit) {
+        val line=row().apply { setPadding(dp(4),dp(12),0,dp(12)) }
+        val text=column().apply {
+            addView(label(title,17,ink,true))
+            addView(label(description,14,muted).apply { setPadding(0,dp(6),dp(12),0) })
+        }
+        line.addView(text,LinearLayout.LayoutParams(0,-2,1f))
+        line.addView(com.google.android.material.switchmaterial.SwitchMaterial(this).apply {
+            setUseMaterialThemeColors(false)
+            thumbTintList=android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_checked),intArrayOf()),intArrayOf(green,colors.muted))
+            trackTintList=android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_checked),intArrayOf()),intArrayOf(androidx.core.graphics.ColorUtils.blendARGB(colors.surface,green,.4f),colors.divider))
+            isChecked=checked; contentDescription=title; tag="setting-toggle:$title"
+            minimumWidth=dp(52); minimumHeight=dp(48); isEnabled=!busy
+            setOnClickListener { val requested=isChecked; isChecked=checked; change(requested) }
+        },LinearLayout.LayoutParams(-2,dp(48)))
+        parent.addView(line)
+        parent.addView(View(this).apply { setBackgroundColor(colors.divider) },LinearLayout.LayoutParams(-1,dp(1)))
+    }
     private fun recycler()=RecyclerView(this).apply { layoutManager=LinearLayoutManager(this@MainActivity); itemAnimator=null; setHasFixedSize(false) }
     private class RowHolder(val box:LinearLayout):RecyclerView.ViewHolder(box) { init { box.layoutParams=RecyclerView.LayoutParams(-1,-2) } }
     private fun column()=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
@@ -2148,7 +2285,7 @@ class MainActivity : Activity() {
     private fun pill(text:String,color:Int,background:Int)=label(text,12,color).apply { setPadding(dp(9),dp(5),dp(9),dp(5)); this.background=rounded(background,14) }
     private fun rounded(color:Int,radius:Int)=GradientDrawable().apply { setColor(color); cornerRadius=dp(radius).toFloat() }
     private fun icon(name:String,description:String,click:()->Unit)=ImageButton(this).apply { contentDescription=description; setImageDrawable(ChatIcon(name,muted)); background=null; setPadding(dp(12),dp(12),dp(12),dp(12)); layoutParams=LinearLayout.LayoutParams(dp(48),dp(48)); setOnClickListener { click() } }
-    private fun action(title:String,click:()->Unit,solid:Boolean=true)=TextView(this).apply { text=title; textSize=if(solid)15f else 12f; gravity=Gravity.CENTER; setTextColor(if(solid)Color.WHITE else green); setPadding(dp(12),dp(9),dp(12),dp(9)); minimumHeight=dp(40); if(solid)background=rounded(green,20); setOnClickListener { click() }; isClickable=true; contentDescription=title }
+    private fun action(title:String,click:()->Unit,solid:Boolean=true)=TextView(this).apply { text=title; textSize=if(solid)15f else 12f; gravity=Gravity.CENTER; setTextColor(if(solid)colors.onAccent else green); setPadding(dp(12),dp(9),dp(12),dp(9)); minimumHeight=dp(40); if(solid)background=rounded(green,20); setOnClickListener { click() }; isClickable=true; contentDescription=title }
     private fun dialog(title:String)=MaterialAlertDialogBuilder(this).setTitle(title)
     private fun trackDialog(dialog:Dialog) { dialogs.add(dialog); dialog.setOnDismissListener { dialogs.remove(dialog); if(imageDialog===dialog) { imageDialog=null; imageMessageId=null } } }
     private fun AlertDialog.Builder.showTracked()=create().also { alert->trackDialog(alert); alert.show(); alert.window?.setWindowAnimations(R.style.DialogMotion); if(vault.lockedStorage)alert.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE) }

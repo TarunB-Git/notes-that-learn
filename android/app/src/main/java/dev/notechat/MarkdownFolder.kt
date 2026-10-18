@@ -9,6 +9,7 @@ import java.io.InputStream
 class MarkdownFolder(private val context: Context, tree: String) {
     private val resolver = context.contentResolver
     private val root = Uri.parse(tree)
+    private val maxDocument=16*1024*1024
     private val directory = DocumentsContract.Document.MIME_TYPE_DIR
     private fun children(parent: Uri): Map<String,Uri> {
         val query = DocumentsContract.buildChildDocumentsUriUsingTree(root,DocumentsContract.getDocumentId(parent))
@@ -20,14 +21,19 @@ class MarkdownFolder(private val context: Context, tree: String) {
         ?: DocumentsContract.createDocument(resolver,parent,mime,name) ?: error("Cannot create $name")
     private fun notes() = child(DocumentsContract.buildDocumentUriUsingTree(root,DocumentsContract.getTreeDocumentId(root)),"Note Chat",directory)
     private fun read(uri: Uri): String = resolver.openInputStream(uri)?.use { input ->
-        val bytes=input.readBytesLimited(16*1024*1024); bytes.toString(Charsets.UTF_8).replace("\r\n","\n")
+        val bytes=input.readBytesLimited(maxDocument); bytes.toString(Charsets.UTF_8).replace("\r\n","\n")
     } ?: error("Cannot read Markdown file")
     private fun size(uri: Uri): Long? = resolver.query(uri,arrayOf(DocumentsContract.Document.COLUMN_SIZE),android.os.Bundle.EMPTY,null)?.use {
         if(it.moveToFirst() && !it.isNull(0))it.getLong(0) else null
     }
+    private fun bounded(name: String, text: String): ByteArray {
+        require(text.length<=maxDocument) { "$name exceeds the 16 MB folder file limit. Export a smaller workspace." }
+        return text.toByteArray(Charsets.UTF_8).also { require(it.size<=maxDocument) { "$name exceeds the 16 MB folder file limit. Export a smaller workspace." } }
+    }
     private fun write(parent: Uri, name: String, text: String) {
+        val bytes=bounded(name,text)
         val uri=child(parent,name,"text/markdown")
-        resolver.openOutputStream(uri,"wt")?.use { it.write(text.toByteArray(Charsets.UTF_8)) } ?: error("Cannot write $name")
+        resolver.openOutputStream(uri,"wt")?.use { it.write(bytes) } ?: error("Cannot write $name")
         check(read(uri)==text) { "The document provider did not save $name correctly" }
     }
     fun sync(engine: ChatEngine, vault: Vault, configure: () -> Unit = {}, predict: (Message) -> Suggestion = { Suggestion(null,"") }) = sync(engine,vault::save,vault::readMedia,configure,predict)
@@ -42,7 +48,6 @@ class MarkdownFolder(private val context: Context, tree: String) {
             if(state.markdown.pendingExternal[name]==source)state.markdown.pendingRendered[name] ?: source else source
         }
         val merged=MarkdownWorkspace.merge(state,effective)
-        merged.conflicts.forEach { name -> write(folder,"${name.removeSuffix(".md")}.conflict-${System.currentTimeMillis()}.md",external.getValue(name)) }
         engine.state=merged.state
         configure()
         val known=state.messages.map { it.id }.toSet()
@@ -50,6 +55,16 @@ class MarkdownFolder(private val context: Context, tree: String) {
             if(message.id !in known && message.category==null && message.trainable() && engine.state.preferences.classification) { val suggestion=predict(message); message.copy(category=suggestion.category,reason=suggestion.reason) } else message
         })
         val output=filenames.map { (category,name) -> name to MarkdownWorkspace.render(engine.state,category?.takeUnless { it.startsWith("chat:") },chatId=category?.removePrefix("chat:")?.takeIf { category.startsWith("chat:") }) }.toMap()
+        // Check every generated file before touching the last recoverable folder.
+        val snapshot=try {
+            val bytes=StateJson.encode(BackupArchive.portable(engine.state))
+            require(bytes.size<=maxDocument) { "workspace.json exceeds the 16 MB folder file limit. Export a smaller workspace." }
+            output.forEach { (name,text)->bounded(name,text) }
+            bytes.toString(Charsets.UTF_8)
+        } catch(error:Exception) {
+            engine.state=state; configure(); throw error
+        }
+        merged.conflicts.forEach { name -> write(folder,"${name.removeSuffix(".md")}.conflict-${System.currentTimeMillis()}.md",external.getValue(name)) }
         val pending=output.filter { (name,text) -> text!=external[name] }
         engine.state=engine.state.copy(markdown=engine.state.markdown.copy(pendingExternal=external.filterKeys { it in pending },pendingRendered=pending))
         // Persist IDs before writing: retrying an interrupted sync must not duplicate editor additions.
@@ -67,7 +82,6 @@ class MarkdownFolder(private val context: Context, tree: String) {
         }
         if(pending.isEmpty() && engine.state==state && state.markdown.pendingRendered.isEmpty()) {
             val metadata=children(folder)["workspace.json"]?.let(::read)
-            val snapshot=StateJson.encode(BackupArchive.portable(engine.state)).toString(Charsets.UTF_8)
             if(metadata!=snapshot)write(folder,"workspace.json",snapshot)
             return merged.conflicts.size
         }
@@ -83,7 +97,7 @@ class MarkdownFolder(private val context: Context, tree: String) {
         }
         engine.state=engine.state.copy(markdown=engine.state.markdown.copy(synced=System.currentTimeMillis()))
         persist(engine.state)
-        write(folder,"workspace.json",StateJson.encode(BackupArchive.portable(engine.state)).toString(Charsets.UTF_8))
+        write(folder,"workspace.json",snapshot)
         return merged.conflicts.size
     }
     fun recover(templates: List<Category>, vault: Vault? = null): ChatState? {

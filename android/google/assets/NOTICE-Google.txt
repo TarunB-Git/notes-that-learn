@@ -1,0 +1,6 @@
+Google ML Kit language identification / translation and Google Play services
+text recognition are Google SDKs governed by their own terms, not Apache 2.0.
+Optional MODs process input on-device; SDK performance and usage metrics are
+sent to Google. Translation/OCR models download only when enabled or requested.
+https://developers.google.com/ml-kit/terms
+https://developers.google.com/android/guides/overview

@@ -12,6 +12,7 @@ class TextClassifier(private val encoder: SentenceEncoder?, private val timing: 
     private var approved = emptyList<Message>()
     private var head: Head? = null
     private var vectors = emptyList<FloatArray>()
+    private var exactLabels = emptyMap<String, Message>()
     private var splitAssignments = mutableMapOf<String, String>()
     private var starter: Head? = null
     private var starterSignature = ""
@@ -30,6 +31,7 @@ class TextClassifier(private val encoder: SentenceEncoder?, private val timing: 
         if(classes.isEmpty())cache.clear()
         approved = confirmations.filter { it.approved && it.deleted == null && it.trainable() && classes.any { c -> c.id == it.category } }
         vectors = approved.map { feature(it.text) }
+        exactLabels = approved.associateBy { textIdentity(it.text) }
         if(starterSignature!=signature()) { starter=if(classes.isEmpty())null else fit(seeds()); starterSignature=signature() }
         head=starter
         personalHead = saved != null && saved.signature == signature() && saved.weights.size == classes.size && saved.weights.all { it.size == dimensions } && saved.bias.size == classes.size
@@ -39,25 +41,28 @@ class TextClassifier(private val encoder: SentenceEncoder?, private val timing: 
     private fun seeds(exclude: Set<String> = emptySet()): List<Pair<String, String>> = categories.flatMap { c ->
         (c.examples.ifEmpty { listOf(c.description) }).filterNot { normalized(it) in exclude }.map { it to c.id }
     }
-    private fun feature(text: String): FloatArray = cache.getOrPut(text) {
-        val result = FloatArray(dimensions)
-        encoder?.encode(text)?.forEachIndexed { index, value -> if (index < 384) result[index] = value * 2 }
-        val cues = floatArrayOf(if (code.containsMatchIn(text)) 1f else 0f, if (junk.containsMatchIn(text)) 1f else 0f,
-            if (TextLinks.contains(text)) 1f else 0f, if (text.trim().startsWith("- [")) 1f else 0f,
-            if (idea.containsMatchIn(text)) 1f else 0f, if (question.containsMatchIn(text) || text.trim().endsWith("?")) 1f else 0f,
-            if (task.containsMatchIn(text)) 1f else 0f, if (Regex("tomorrow|today|deadline|due", RegexOption.IGNORE_CASE).containsMatchIn(text)) 1f else 0f,
-            (text.length / 500f).coerceAtMost(1f), (text.split(Regex("\\s+")).size / 60f).coerceAtMost(1f),
-            if (text.uppercase() == text && text.any { it.isLetter() }) 1f else 0f,
-            if (Regex("\\b(think|feel|noticed|realized|wonder)\\b", RegexOption.IGNORE_CASE).containsMatchIn(text)) 1f else 0f)
-        cues.copyInto(result, 384)
-        val digest = MessageDigest.getInstance("SHA-256")
-        Regex("[\\p{L}\\p{N}_]+").findAll(normalized(text).take(6000)).forEach {
-            val hash = digest.digest(it.value.toByteArray(Charsets.UTF_8))
-            result[396 + (hash[0].toInt() and 127)] += 1f
+    private fun feature(source: String): FloatArray {
+        val text=source.take(CLASSIFICATION_CHARS)
+        return cache.getOrPut(text) {
+            val result = FloatArray(dimensions)
+            encoder?.encode(text)?.forEachIndexed { index, value -> if (index < 384) result[index] = value * 2 }
+            val cues = floatArrayOf(if (code.containsMatchIn(text)) 1f else 0f, if (junk.containsMatchIn(text)) 1f else 0f,
+                if (TextLinks.contains(text)) 1f else 0f, if (text.trim().startsWith("- [")) 1f else 0f,
+                if (idea.containsMatchIn(text)) 1f else 0f, if (question.containsMatchIn(text) || text.trim().endsWith("?")) 1f else 0f,
+                if (task.containsMatchIn(text)) 1f else 0f, if (Regex("tomorrow|today|deadline|due", RegexOption.IGNORE_CASE).containsMatchIn(text)) 1f else 0f,
+                (text.length / 500f).coerceAtMost(1f), (text.split(Regex("\\s+")).size / 60f).coerceAtMost(1f),
+                if (text.uppercase() == text && text.any { it.isLetter() }) 1f else 0f,
+                if (Regex("\\b(think|feel|noticed|realized|wonder)\\b", RegexOption.IGNORE_CASE).containsMatchIn(text)) 1f else 0f)
+            cues.copyInto(result, 384)
+            val digest = MessageDigest.getInstance("SHA-256")
+            Regex("[\\p{L}\\p{N}_]+").findAll(normalized(text).take(6000)).forEach {
+                val hash = digest.digest(it.value.toByteArray(Charsets.UTF_8))
+                result[396 + (hash[0].toInt() and 127)] += 1f
+            }
+            val norm = sqrt(result.sliceArray(396 until 524).sumOf { (it * it).toDouble() }).toFloat().coerceAtLeast(1e-12f)
+            for (i in 396 until 524) result[i] /= norm
+            result
         }
-        val norm = sqrt(result.sliceArray(396 until 524).sumOf { (it * it).toDouble() }).toFloat().coerceAtLeast(1e-12f)
-        for (i in 396 until 524) result[i] /= norm
-        result
     }
     private fun fit(records: List<Pair<String, String>>): Head {
         val rows = records.map { feature(it.first) to categories.indexOfFirst { c -> c.id == it.second } }.filter { it.second >= 0 }
@@ -93,12 +98,12 @@ class TextClassifier(private val encoder: SentenceEncoder?, private val timing: 
         val sum = exp.sum().coerceAtLeast(1e-12f)
         return exp.map { it / sum }.toFloatArray()
     }
-    private fun predict(message: Message, fitted: Head?, memory: List<Message>, remembered: List<FloatArray>, personal: Boolean): Suggestion {
+    private fun predict(message: Message, fitted: Head?, memory: List<Message>, remembered: List<FloatArray>, personal: Boolean, exact: Map<String, Message>): Suggestion {
         if (!message.trainable()) return Suggestion(null, "Choose a category for this attachment.")
         val allowed = categories.filterNot { it.id in message.rejected }
         if (allowed.isEmpty()) return Suggestion(null, "No suggestions left. Choose the category yourself.")
-        val exact = memory.lastOrNull { normalized(it.text) == normalized(message.text) && it.category in allowed.map { c -> c.id } }
-        if (exact != null) return Suggestion(exact.category, "Matches a message you approved.")
+        val match = exact[textIdentity(message.text)]?.takeIf { found -> allowed.any { it.id == found.category } }
+        if (match != null) return Suggestion(match.category, "Matches a message you approved.")
         val x = feature(message.text)
         if (encoder != null) {
             val nearest = memory.indices.filter { memory[it].category in allowed.map { c -> c.id } }.maxByOrNull { index ->
@@ -107,14 +112,15 @@ class TextClassifier(private val encoder: SentenceEncoder?, private val timing: 
             if (nearest != null && (0 until 384).sumOf { (x[it] * remembered[nearest][it] / 4).toDouble() } >= .86)
                 return Suggestion(memory[nearest].category, "Similar to a message you approved.")
         }
+        val text=message.text.take(CLASSIFICATION_CHARS)
         fun cue(id: String, reason: String) = if (allowed.any { it.id == id }) Suggestion(id, reason) else null
         if (!personal) {
-            if (code.containsMatchIn(message.text) || junk.containsMatchIn(message.text)) cue("junk", "Code or placeholder text.")?.let { return it }
-            if (message.text.trim().startsWith("- [")) cue("todos", "Contains a task checkbox.")?.let { return it }
-            if (idea.containsMatchIn(message.text)) cue("ideas", "Proposes a possibility or change.")?.let { return it }
-            if (question.containsMatchIn(message.text) || message.text.trim().endsWith("?")) cue("questions", "Question wording.")?.let { return it }
-            if (task.containsMatchIn(message.text)) cue("todos", "An action to complete.")?.let { return it }
-            if (TextLinks.contains(message.text)) cue("links", "A saved web reference.")?.let { return it }
+            if (code.containsMatchIn(text) || junk.containsMatchIn(text)) cue("junk", "Code or placeholder text.")?.let { return it }
+            if (text.trim().startsWith("- [")) cue("todos", "Contains a task checkbox.")?.let { return it }
+            if (idea.containsMatchIn(text)) cue("ideas", "Proposes a possibility or change.")?.let { return it }
+            if (question.containsMatchIn(text) || text.trim().endsWith("?")) cue("questions", "Question wording.")?.let { return it }
+            if (task.containsMatchIn(text)) cue("todos", "An action to complete.")?.let { return it }
+            if (TextLinks.contains(text)) cue("links", "A saved web reference.")?.let { return it }
         }
         if (fitted == null) return Suggestion(allowed.first().id, "Choose or approve a category.")
         val p = probabilities(x, fitted)
@@ -140,8 +146,9 @@ class TextClassifier(private val encoder: SentenceEncoder?, private val timing: 
         val baseline = fit(seeds)
         val candidate = fit(seeds + training.map { it.text to it.category!! })
         val memory = training.map { feature(it.text) }
+        val trainingLabels = training.associateBy { textIdentity(it.text) }
         fun score(model: Head, personal: Boolean): Double {
-            val predictions = test.map { predict(it.copy(rejected = emptySet()), model, training, memory, personal).category }
+            val predictions = test.map { predict(it.copy(rejected = emptySet()), model, training, memory, personal, trainingLabels).category }
             return categories.indices.sumOf { i ->
                 val id = categories[i].id
                 val tp = test.indices.count { test[it].category == id && predictions[it] == id }.toDouble()
@@ -167,7 +174,7 @@ class TextClassifier(private val encoder: SentenceEncoder?, private val timing: 
     }
     @Synchronized fun classify(message: Message): Suggestion {
         val start=System.nanoTime()
-        return try { predict(message,head,approved,vectors,personalHead) } finally { timing(System.nanoTime()-start) }
+        return try { predict(message,head,approved,vectors,personalHead,exactLabels) } finally { timing(System.nanoTime()-start) }
     }
     private fun stableHash(text: String) = MessageDigest.getInstance("SHA-256").digest(normalized(text).toByteArray()).joinToString("") { "%02x".format(it) }
 }

@@ -1,0 +1,43 @@
+# Local candidate; v1.5.1 tag and signed APK are not published yet.
+Disabled: Awaiting new-controls phone retest, v1.5.1 tag and signature reproduction
+AntiFeatures:
+  NonFreeNet:
+    en-US: Optional WhatsApp forwarding and Google Drive backup destinations. Notes
+      and classification work offline.
+Categories:
+  - Writing
+License: Apache-2.0
+SourceCode: https://github.com/TarunB-Git/note-processing
+IssueTracker: https://github.com/TarunB-Git/note-processing/issues
+
+AutoName: Note Chat
+
+RepoType: git
+Repo: https://github.com/TarunB-Git/note-processing.git
+Binaries: https://github.com/TarunB-Git/note-processing/releases/download/v%v/note-chat-v%v-fdroid-arm64.apk
+
+Builds:
+  - versionName: 1.5.1
+    versionCode: 9
+    commit: v1.5.1
+    subdir: android
+    gradle:
+      - yes
+    rm:
+      - android/google
+      - archive/v1
+    gradleprops:
+      - fdroid=true
+
+AllowedAPKSigningKeys: 8ea709abebd090c44a6b2dfed02f433ec57dc27d283d4dfdee124aba236c6e21
+
+MaintainerNotes: |-
+  The free build excludes android/google entirely. No proprietary Google SDKs
+  are included. Drive uses the Android document/share picker; WhatsApp sharing
+  is optional. Check these disclosures during inclusion review.
+  v1.5.1 is a local candidate; the tag and signed APK do not exist yet.
+
+AutoUpdateMode: None
+UpdateCheckMode: None
+CurrentVersion: 1.5.1
+CurrentVersionCode: 9

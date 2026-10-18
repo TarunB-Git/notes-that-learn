@@ -155,4 +155,23 @@ class MarkdownFolderTest {
         assertEquals(photo,folder.recover(engine.state.categories)!!.categories.single().photo)
     }
 
+    @Test fun oversizedFolderSnapshotPreservesTheLastRecoverableFiles() {
+        val (provider,folder,engine)=fixture()
+        folder.sync(engine,{}, { error("No media") })
+        val directory=File(provider.root,"Note Chat")
+        val before=directory.listFiles()!!.associate { it.name to it.readBytes().toList() }
+        val large="a".repeat(MAX_MESSAGE_CHARS)
+        engine.state=engine.state.copy(messages=engine.state.messages+(0..16).map { Message(id="large-$it",text=large,category="thoughts") })
+        val original=engine.state
+        var persisted=false
+        val error=assertThrows(IllegalArgumentException::class.java) {
+            folder.sync(engine,{ persisted=true },{ error("No media") })
+        }
+        assertTrue(error.message!!.contains("16 MB")); assertFalse(persisted)
+        assertEquals(original,engine.state)
+        assertEquals(before,directory.listFiles()!!.associate { it.name to it.readBytes().toList() })
+        val recovered=folder.recover(engine.state.categories)!!
+        assertEquals(listOf("First note"),recovered.messages.map { it.text })
+    }
+
 }

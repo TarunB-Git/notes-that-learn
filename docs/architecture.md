@@ -10,6 +10,8 @@ The encrypted snapshot holds messages, labels, preferences, training weights, pe
 
 Completed to-dos and scheduled starred archives use timestamp-based 24-hour visibility rules. Recently deleted retains records and media for less than 90 days. Expired records are purged when the workspace opens.
 
+Notes accept up to 1,000,000 characters. Lists render bounded 6,000-character previews; a paged reader opens the full text. Imports, Markdown, edits, and backups preserve the complete note. Classifier features and encoder input use the first 12,000 characters, while full-text approval matches use normalized SHA-256 identities. Widget projections use short task previews. Larger stored text still requires memory; these bounds limit additional rendering and classification overhead.
+
 ## Classification
 
 The built-in pipeline combines intent cues, hashed wording features, and memory of approved examples. Optional quantized MiniLM adds sentence embeddings; encoder weights remain frozen on Android. Images without reviewed OCR text and recordings without reviewed transcripts are manually tagged and excluded from text training.

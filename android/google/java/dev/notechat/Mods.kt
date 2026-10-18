@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit
 
 /** Invoked only after a mod is enabled; text and images are processed on-device. */
 object Mods {
+    const val available = true
     fun languages()=TranslateLanguage.getAllLanguages().sortedBy { java.util.Locale.forLanguageTag(it).displayLanguage }
     fun downloaded()=Tasks.await(RemoteModelManager.getInstance().getDownloadedModels(TranslateRemoteModel::class.java),30,TimeUnit.SECONDS).map { it.language }.toSet()
     fun download(language: String) {

@@ -43,6 +43,7 @@ class ChatIcon(private val name: String, private val color: Int) : Drawable() {
             "copy" -> { canvas.drawRoundRect(8f,7f,21f,22f,1f,1f,paint); line(16f,3f,3f,3f,3f,17f) }
             "delete" -> { line(4f,6f,20f,6f); line(9f,3f,15f,3f); line(6f,6f,7f,21f,17f,21f,18f,6f); line(10f,10f,10f,17f); line(14f,10f,14f,17f) }
             "share" -> { canvas.drawCircle(5f,12f,2.5f,paint); canvas.drawCircle(19f,5f,2.5f,paint); canvas.drawCircle(19f,19f,2.5f,paint); line(7f,11f,17f,6f); line(7f,13f,17f,18f) }
+            "switch" -> { canvas.drawArc(4f,4f,20f,20f,205f,145f,false,paint); line(15f,3f,20f,5f,19f,10f); canvas.drawArc(4f,4f,20f,20f,25f,145f,false,paint); line(9f,21f,4f,19f,5f,14f) }
             "settings" -> { canvas.drawCircle(12f,12f,7f,paint); canvas.drawCircle(12f,12f,2.5f,paint); for(i in 0..7) { val angle=i*Math.PI/4; line((12+7*kotlin.math.cos(angle)).toFloat(),(12+7*kotlin.math.sin(angle)).toFloat(),(12+10*kotlin.math.cos(angle)).toFloat(),(12+10*kotlin.math.sin(angle)).toFloat()) } }
             "pin" -> { line(8f,3f,16f,3f,15f,10f,19f,15f,5f,15f,9f,10f,8f,3f); line(12f,15f,12f,22f) }
             "star" -> line(12f,2f,15f,8f,22f,9f,17f,14f,18f,22f,12f,18f,6f,22f,7f,14f,2f,9f,9f,8f,12f,2f)

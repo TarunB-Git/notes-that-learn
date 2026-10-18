@@ -43,6 +43,6 @@ class WidgetTasks(context: Context) {
     companion object {
         private val guard=Any()
         fun project(state: ChatState, now: Long=System.currentTimeMillis()) = state.messages.filter { it.visible(now) && it.category=="todos" }
-            .map { Message(id=it.id,text=it.text.ifBlank { it.attachment?.name.orEmpty() },category="todos",done=it.done,completedAt=it.completedAt,starred=it.starred,starArchiveAt=it.starArchiveAt) }
+            .map { Message(id=it.id,text=it.text.ifBlank { it.attachment?.name.orEmpty() }.take(500),category="todos",done=it.done,completedAt=it.completedAt,starred=it.starred,starArchiveAt=it.starArchiveAt) }
     }
 }

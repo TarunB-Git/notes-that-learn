@@ -26,6 +26,7 @@ object BackupArchive {
         fun close() { staging.deleteRecursively() }
     }
     private const val iterations=600000
+    private const val maxEntries=5000
     private const val maxWorkspace=16*1024*1024
     private const val maxMedia=50L*1024*1024
     private const val maxTotal=512L*1024*1024
@@ -38,7 +39,7 @@ object BackupArchive {
         require(state.messages.map { it.id }.distinct().size==state.messages.size) { "Backup contains duplicate message IDs" }
         require(state.categories.all { it.id.matches(Regex("[A-Za-z0-9-]{1,64}")) && it.title.isNotBlank() && it.title.length<=60 && it.description.length<=2000 && it.examples.size<=30 && it.examples.all { text -> text.length<=2000 } })
         require(state.chats.all { it.id.matches(Regex("[A-Za-z0-9-]{1,64}")) && it.title.isNotBlank() && it.title.length<=60 })
-        require(state.messages.all { it.id.matches(Regex("[A-Za-z0-9-]{1,64}")) && it.text.length<=20000 && (it.category==null || state.categories.any { c->c.id==it.category }) && (it.chatId==null || state.chats.any { c->c.id==it.chatId }) })
+        require(state.messages.all { it.id.matches(Regex("[A-Za-z0-9-]{1,64}")) && it.text.length<=MAX_MESSAGE_CHARS && (it.category==null || state.categories.any { c->c.id==it.category }) && (it.chatId==null || state.chats.any { c->c.id==it.chatId }) })
         require(attachments(state).all { it.file.matches(Regex("[a-f0-9-]{36}")) && it.bytes in 0..maxMedia && it.name.length<=120 })
         state.model?.let { require(it.weights.size==state.categories.size && it.bias.size==state.categories.size && it.weights.all { row->row.size==524 && row.all(Float::isFinite) } && it.bias.all(Float::isFinite)) { "Invalid classifier weights" } }
     }
@@ -51,8 +52,13 @@ object BackupArchive {
         require(kind in listOf("workspace","model")); validate(state)
         if(kind=="model")require(state.messages.isEmpty() && attachments(state).isEmpty() && state.model!=null && state.quiz==null && state.splits.isEmpty()) { "Model export must exclude personal examples and media" }
         val snapshot=portable(state)
+        val payload=StateJson.encode(snapshot)
+        require(payload.size<=maxWorkspace) { "Notes and settings exceed the 16 MB backup limit. Export individual categories as Markdown or reduce the workspace before retrying." }
+        val items=attachments(snapshot)
+        require(items.size+2<=maxEntries) { "A backup can contain at most ${maxEntries-2} attachments. Export a smaller workspace." }
+        require(items.sumOf { it.bytes }<=maxTotal) { "Attachments exceed the 512 MB backup limit. Export a smaller workspace." }
         val salt=ByteArray(16).also { SecureRandom().nextBytes(it) }; val key=key(password,salt)
-        try { ZipOutputStream(file.outputStream()).use { zip ->
+        try { ZipOutputStream(LimitedOutputStream(file.outputStream(),maxTotal)).use { zip ->
             zip.putNextEntry(ZipEntry("manifest.json"))
             zip.write(JSONObject().put("format","note-chat-backup").put("version",1).put("kind",kind).put("iterations",iterations)
                 .put("salt",Base64.getEncoder().encodeToString(salt)).toString().toByteArray())
@@ -64,8 +70,19 @@ object BackupArchive {
                 CipherOutputStream(object:FilterOutputStream(zip) { override fun close() { flush() } },cipher).use(write)
                 zip.closeEntry()
             }
-            encrypted("workspace.enc") { output -> GZIPOutputStream(output).use { it.write(StateJson.encode(snapshot)) } }
-            attachments(snapshot).forEach { attachment -> encrypted("media/${attachment.file}.enc") { out -> media(attachment).use { it.copyTo(out) } } }
+            encrypted("workspace.enc") { output -> GZIPOutputStream(output).use { it.write(payload) } }
+            items.forEach { attachment -> encrypted("media/${attachment.file}.enc") { out ->
+                media(attachment).use { input ->
+                    val buffer=ByteArray(8192); var count=0L
+                    while(true) {
+                        val size=input.read(buffer); if(size<0)break
+                        count+=size
+                        require(count<=attachment.bytes) { "Attachment size changed during backup: ${attachment.name}" }
+                        out.write(buffer,0,size)
+                    }
+                    require(count==attachment.bytes) { "Attachment size changed during backup: ${attachment.name}" }
+                }
+            } }
         } } catch(error: Exception) { file.delete(); throw error }
     }
     fun kind(file: File): String? = ZipFile(file).use { zip -> zip.getEntry("manifest.json")?.let { entry ->
@@ -77,7 +94,7 @@ object BackupArchive {
         val staging=File(cache,"restore-${UUID.randomUUID()}").apply { mkdirs() }
         try { ZipFile(file).use { zip ->
             val entries=zip.entries().asSequence().toList()
-            require(entries.size<=5000 && entries.map { it.name }.distinct().size==entries.size)
+            require(entries.size<=maxEntries && entries.map { it.name }.distinct().size==entries.size)
             require(entries.all { it.name in listOf("manifest.json","workspace.enc") || it.name.matches(Regex("media/[a-f0-9-]{36}\\.enc")) }) { "Unexpected backup entry" }
             val manifest=JSONObject(zip.getInputStream(zip.getEntry("manifest.json") ?: error("Backup manifest missing")).use { it.limited(65536).toString(Charsets.UTF_8) })
             require(manifest.getString("format")=="note-chat-backup" && manifest.getInt("version")==1 && manifest.getInt("iterations")==iterations)
@@ -117,14 +134,29 @@ object BackupArchive {
         } } catch(error: Exception) { staging.deleteRecursively(); throw error }
     }
     fun merge(current: ChatState, restored: Restored): ChatState {
-        if(current.messages.isEmpty())return restored.state.copy(importedArchives=current.importedArchives+restored.state.importedArchives+restored.fingerprint)
+        validate(current); validate(restored.state)
+        if(current.messages.isEmpty())return restored.state.copy(importedArchives=current.importedArchives+restored.state.importedArchives+restored.fingerprint).also(::validate)
+        val conflicts=current.categories.any { category->restored.state.chats.any { it.id==category.id } } ||
+            current.chats.any { chat->restored.state.categories.any { it.id==chat.id } }
+        require(!conflicts) { "A private notebook in this backup has been promoted to a category, or vice versa. Restore into a separate empty workspace to recover both versions." }
         val known=current.messages.map { it.id }.toSet()
         val categories=current.categories+restored.state.categories.filter { c -> current.categories.none { it.id==c.id } }
         val chats=current.chats+restored.state.chats.filter { c -> current.chats.none { it.id==c.id } }
-        require(categories.size<=32 && chats.size<=256)
+        require(categories.size<=32 && chats.size<=256) { "Restoring this backup would exceed the category or private notebook limit." }
         return current.copy(categories=categories,chats=chats,messages=current.messages+restored.state.messages.filterNot { it.id in known },
             model=if(categories==current.categories)current.model else null,report=if(categories==current.categories)current.report else null,
-            importedArchives=current.importedArchives+restored.fingerprint)
+            importedArchives=current.importedArchives+restored.fingerprint).also(::validate)
+    }
+    private class LimitedOutputStream(output: OutputStream, private val limit: Long): FilterOutputStream(output) {
+        private var count=0L
+        override fun write(value: Int) {
+            require(count<limit) { "The encrypted backup exceeds 512 MB. Export a smaller workspace." }
+            out.write(value); count++
+        }
+        override fun write(bytes: ByteArray, offset: Int, length: Int) {
+            require(length.toLong()<=limit-count) { "The encrypted backup exceeds 512 MB. Export a smaller workspace." }
+            out.write(bytes,offset,length); count+=length
+        }
     }
     private fun InputStream.limited(max: Int): ByteArray {
         val output=java.io.ByteArrayOutputStream(); val buffer=ByteArray(8192)

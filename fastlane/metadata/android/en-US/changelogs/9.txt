@@ -1,0 +1,3 @@
+Switch Chat and Notes beside Settings. Notes edits autosave. Choose theme and launcher icon colors.
+Separate Google-free F-Droid build; standard APK keeps translation and OCR.
+Fix backup export/merge limits and oversized Markdown recovery. Update ONNX Runtime for 16 KB native-library alignment. Improve long-note rendering.

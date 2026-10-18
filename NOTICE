@@ -13,6 +13,7 @@ android/app/src/main/assets/NOTICE.txt with the corresponding license texts.
 Material Design icons: Copyright Google LLC, Apache License 2.0.
 Category vectors adapted from https://github.com/google/material-design-icons.
 
-Google ML Kit and Google Play services dependencies retain their own terms.
+The standard Android build includes Google ML Kit and Google Play services
+dependencies, which retain their own terms. The F-Droid build excludes them.
 They are not covered by the project's Apache 2.0 license.
 https://developers.google.com/ml-kit/terms
