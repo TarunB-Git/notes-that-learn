@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for helping improve Note Chat. Check the [known release gaps](https://github.com/TarunB-Git/note-processing/blob/main/docs/release-readiness.md) first.
+        Report the problem and the steps needed to reproduce it.
         Use invented example notes. This report is public: omit personal notes, recordings, backup passwords, and signing keys.
   - type: dropdown
     id: component
@@ -22,7 +22,7 @@ body:
     attributes:
       label: App version or Git commit
       description: For Android, find the installed version in Android Settings → Apps → Note Chat.
-      placeholder: "For example: v1.5.0 APK, or a short commit ID"
+      placeholder: "For example: v1.5.1 APK, or a short commit ID"
     validations:
       required: true
   - type: input

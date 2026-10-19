@@ -2,124 +2,108 @@
 
 **Capture a thought like a message. Find it again as a note, idea, or task.**
 
-Note Chat is an Android notebook for people who send notes to themselves. Write
-first, review a suggested category, and browse the same notes in a chat inbox or
-category boards. The classifier runs on your phone and learns from labels you
-confirm. No account or classification server is required.
+An Android notebook with a chat inbox, category boards, and a local classifier
+that learns from labels you confirm. No account or classification server required.
 
 [![Checks](https://github.com/TarunB-Git/note-processing/actions/workflows/checks.yml/badge.svg)](https://github.com/TarunB-Git/note-processing/actions/workflows/checks.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-**[Download Android APK](https://github.com/TarunB-Git/note-processing/releases/download/v1.5.0/note-chat-v1.5.0-arm64.apk)**
+**[Download Android v1.5.1](https://github.com/TarunB-Git/note-processing/releases/tag/v1.5.1)**
+· [Google-free APK](https://github.com/TarunB-Git/note-processing/releases/download/v1.5.1/note-chat-v1.5.1-fdroid-arm64.apk)
 · [First five minutes](docs/getting-started.md)
-· [Engineering case study](docs/engineering.md)
 · [Build and contribute](CONTRIBUTING.md)
+
+Android 11+ · ARM64
 
 | Capture in a conversation | Browse by category |
 | :---: | :---: |
-| <img src="docs/android-inbox.png" width="280" alt="Inbox with a thought, an idea, a task, and a voice note, with category feedback controls" /> | <img src="docs/android-notes.png" width="280" alt="Notes layout with an Inbox preview, category boards, and separate Notes and Chats tabs" /> |
-| Keep the original order and confirm suggestions. | Open the same records through boards and search. |
-
-**Current stage: preparing a small Android beta.** The published APK is v1.5.0
-for ARM64 phones running Android 11 or later. The
-[18 October readiness review](docs/release-readiness.md) records two reproduced
-backup defects and a native-library compatibility gap in that release. The
-1.5.1 candidate fixes those paths. Owner reports phone checks passed on Samsung /
-Android 16; the new controls need a short retest and the signed upgrade needs
-confirmation. Follow the [release steps](docs/release-next-steps.md). Published builds
-and the working checkout can differ;
-see the [release notes](https://github.com/TarunB-Git/note-processing/releases).
+| <img src="docs/android-inbox.png" width="280" alt="Inbox with notes, category feedback controls, and a voice recording" /> | <img src="docs/android-notes.png" width="280" alt="Notes layout with an Inbox preview, category boards, and separate private chats" /> |
 
 ## A small workflow
 
 1. **Capture:** send “Book the train for Friday.” or share text from another app.
-2. **Review:** confirm the suggested category, or choose your own. Confirmations
-   teach the classifier; a thumbs-down only tries another suggestion.
-3. **Find:** return through Inbox, search, a category board, or the To-do list.
+2. **Review:** confirm the suggested category or choose your own.
+3. **Find:** return through Inbox, search, category boards, or the To-do list.
 
-Private chats have their own tab and stay outside classification. Unsorted keeps
-notes awaiting your approval, even when they already have a suggested category.
+Switch between Chat and Notes with the arrows beside Settings. Notes edits
+autosave. Private chats stay outside classification; Unsorted holds unapproved notes.
 
 ## What you can do
 
 | Need | In the app |
 | --- | --- |
-| Capture without arranging folders first | Text, Markdown, links, images, recordings, and Android sharing |
-| Organize in your own terms | Built-in and custom categories, confirmed labels, batch reclassification |
-| Keep track of actions | To-do checklist, home-screen widget, optional reminders |
-| Work with existing notes | TXT/Markdown and WhatsApp ZIP import, category export, editable Markdown folder |
-| Keep control of local data | Encrypted app storage, optional app lock, private chats, encrypted ZIP export |
-| Add tools when useful | Optional local speech transcription, sentence embeddings, translation, and image text extraction |
+| Capture quickly | Text, Markdown, links, images, recordings, and Android sharing |
+| Organize your way | Custom categories, confirmed labels, batch reclassification |
+| Track actions | To-do checklist, home-screen widget, optional reminders |
+| Use existing notes | TXT/Markdown and WhatsApp ZIP import, editable Markdown folder |
+| Protect your workspace | Encrypted storage, app lock, private chats, encrypted backups |
+| Personalize the app | Chat/Notes layouts, light/dark themes, palettes, launcher icon colors |
+| Add optional tools | Local speech transcription, sentence embeddings, translation, OCR |
 
 Search, replies, stars, pins, multiple selection, splitting, and merging support
-the everyday note workflow. Completed tasks archive after 24 hours; deleted
-notes remain recoverable for 90 days. See the
-[usage and data guide](docs/getting-started.md) for limits and recovery behavior.
+everyday use. Completed tasks archive after 24 hours; deleted notes remain
+recoverable for 90 days.
 
 ## How the learning works
 
-The built-in classifier combines wording cues, hashed word features, approved
-examples, and a small trainable classification layer. Optional MiniLM adds
-sentence embeddings: numerical representations used to compare text meaning.
-It does not generate chat replies.
+Wording cues, hashed word features, approved examples, and a small trainable
+classifier suggest categories on your phone. Optional MiniLM adds sentence
+embeddings. Confirmations and manual category choices teach it; predictions and
+thumbs-down do not. Editing approved text revokes its old training label.
 
 ```mermaid
 flowchart LR
     Capture[Write or import] --> Notes[Encrypted local notes]
     Notes --> Suggest[Category suggestion]
-    Suggest --> Review[You confirm or correct]
-    Review --> Learn[Approved examples + small classifier]
+    Suggest --> Review[Confirm or correct]
+    Review --> Learn[Approved examples + personal classifier]
     Learn --> Suggest
     Notes --> Browse[Inbox / boards / tasks]
 ```
 
-Android keeps the MiniLM encoder frozen. With at least six distinct approvals
-per category, it can train a personal classification layer and compare it with
-the starter on held-out examples. That comparison excludes held-out text from
-training and example memory. It measures the available labelled sample, rather
-than guaranteeing accuracy on future notes.
+Six distinct approvals per category enable personal-head training. Roughly 20%
+of examples are held out and excluded from both fitting and example memory;
+new weights are adopted when their macro F1 matches or beats the starter.
+MiniLM stays frozen. Results describe the user's labelled sample, rather than
+an accuracy guarantee for future notes.
 
 ## Engineering worth exploring
 
-| Area | Implementation and evidence |
+| Area | Implementation |
 | --- | --- |
-| Android | Kotlin, native Views, RecyclerView, separate message operations and serialization |
-| Personal classification | 524 features, balanced softmax training, approval boundaries, stable evaluation split |
-| Local storage | AES-GCM snapshots and attachments; Android Keystore protects the data key |
-| Editable Markdown | Stable message IDs, three-way reconciliation, conflict copies, interrupted-write recovery |
-| Verification | Domain tests, Robolectric UI tests, lint, desktop checks, signed release workflow |
-| Honest evaluation | [Dated verification results and unresolved findings](docs/release-readiness.md), separate from historical model scores |
+| Native Android | Kotlin, Views, RecyclerView; shared records across layouts |
+| Personal classification | [524-feature pipeline](android/app/src/main/java/dev/notechat/TextClassifier.kt), approval-based learning, held-out evaluation |
+| Local storage | [AES-GCM encryption](android/app/src/main/java/dev/notechat/Vault.kt), Android Keystore, device authentication |
+| Editable Markdown | [Stable IDs and three-way reconciliation](android/app/src/main/java/dev/notechat/MarkdownWorkspace.kt), conflict copies, interrupted-write recovery |
+| Portable backups | [Encrypted archives](android/app/src/main/java/dev/notechat/BackupArchive.kt) with shared export/restore limits and validation before merging |
+| Verification and delivery | 127 JVM/Robolectric tests per Android distribution during v1.5.1 preparation; [CI](.github/workflows/checks.yml), lint, signed APK/AAB releases |
 
-The [engineering case study](docs/engineering.md) explains the tradeoffs and
-links to the implementation. The [architecture reference](docs/architecture.md)
-describes storage, learning, synchronization, and recovery in more detail.
-
-F-Droid preparation: see [the release plan](docs/fdroid-release.md). The separate free build excludes Google translation/OCR; it has not been submitted.
+The Google-free distribution excludes Google translation/OCR code and SDKs.
+Two clean unsigned free builds from different source directories matched byte
+for byte. F-Droid inclusion and independent rebuild verification are separate.
 
 ## Data and optional downloads
 
-The Android classifier works without an extra download. Optional MiniLM and
-Vosk model downloads enable sentence similarity and local English transcription.
-Optional Google ML Kit translation and OCR process content on-device; Google
-receives SDK usage and performance metrics. OCR and language identification
-require Google Play services.
+The built-in classifier works without a model download. Optional MiniLM and
+Vosk models enable sentence similarity and local English transcription.
+The standard APK includes optional ML Kit translation/OCR: content is processed
+locally, while Google receives SDK usage/performance metrics. OCR and language
+identification require Google Play services. The Google-free APK omits these tools.
 
-Markdown exports and their attachments are readable files outside app-lock
-protection. Drive is a destination you choose for a backup, rather than an
-automatic sync service. Android and desktop keep independent workspaces.
+Markdown exports are readable outside app-lock protection. Drive can hold a
+chosen backup; it does not provide automatic cloud sync. Android and desktop
+use independent workspaces.
 
 ## Explore the repository
 
-| Path | Start here for |
+| Path | Contents |
 | --- | --- |
-| [Android app](android/) | Screens, classifier, encrypted storage, widget, and tests |
-| [Desktop organizer](desktop/README.md) | Python and browser interface; local install and sample commands |
-| [Engineering case study](docs/engineering.md) | Design choices, tradeoffs, and code walkthrough |
-| [Contributor guide](CONTRIBUTING.md) | Build, checks, release process, and useful contributions |
-| [Original experiment](archive/v1/README.md) | Historical TF-IDF/SVM classifier and report; separate from current app accuracy |
+| [Android](android/) | App, classifier, encrypted storage, widget, and tests |
+| [Desktop organizer](desktop/README.md) | Python organizer with a local browser interface |
+| [Browser showcase](showcase/) | Interactive product demo and static website |
+| [Contributor guide](CONTRIBUTING.md) | Build requirements and checks |
+| [Original experiment](archive/v1/README.md) | Historical TF-IDF/SVM classifier and report |
 
-Found a problem? [Report a bug](https://github.com/TarunB-Git/note-processing/issues/new?template=bug_report.yml)
-with your app version and a small synthetic example. Keep personal notes and
-backup passwords out of public reports.
-
-[Apache 2.0 license](LICENSE) · [Third-party notices](NOTICE) · [Known release gaps](docs/release-readiness.md)
+[Report a problem](https://github.com/TarunB-Git/note-processing/issues/new?template=bug_report.yml)
+· [Release notes](https://github.com/TarunB-Git/note-processing/releases)
+· [Apache 2.0](LICENSE) · [Third-party notices](NOTICE)

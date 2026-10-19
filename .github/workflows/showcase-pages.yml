@@ -1,5 +1,13 @@
 name: Publish showcase
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'showcase/**'
+      - 'docs/android-inbox.png'
+      - 'docs/android-notes.png'
+      - 'android/app/src/main/assets/classes.json'
+      - '.github/workflows/showcase-pages.yml'
   workflow_dispatch:
 permissions:
   contents: read

@@ -1,5 +1,3 @@
-# Local candidate; v1.5.1 tag and signed APK are not published yet.
-Disabled: Awaiting new-controls phone retest, v1.5.1 tag and signature reproduction
 AntiFeatures:
   NonFreeNet:
     en-US: Optional WhatsApp forwarding and Google Drive backup destinations. Notes
@@ -35,7 +33,8 @@ MaintainerNotes: |-
   The free build excludes android/google entirely. No proprietary Google SDKs
   are included. Drive uses the Android document/share picker; WhatsApp sharing
   is optional. Check these disclosures during inclusion review.
-  v1.5.1 is a local candidate; the tag and signed APK do not exist yet.
+  The v1.5.1 tag and developer-signed free APK are public. Independent
+  rebuild/signature verification is required during inclusion review.
 
 AutoUpdateMode: None
 UpdateCheckMode: None
