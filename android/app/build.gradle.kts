@@ -25,8 +25,8 @@ android {
         applicationId = "dev.notechat"
         minSdk = 30
         targetSdk = 35
-        versionCode = 9
-        versionName = "1.5.1"
+        versionCode = 10
+        versionName = "1.5.2"
         testInstrumentationRunner = "dev.notechat.RuntimeChecks"
         ndk { abiFilters += if (providers.gradleProperty("emulator").orNull == "true") listOf("arm64-v8a", "x86_64") else listOf("arm64-v8a") }
     }

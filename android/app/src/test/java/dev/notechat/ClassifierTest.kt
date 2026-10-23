@@ -5,6 +5,20 @@ import org.junit.Test
 
 class ClassifierTest {
     private val classes=listOf(Category("ideas","Ideas","Proposals",listOf("We could open a bookstore","What if the roof was a garden")),Category("todos","To-do","Actions",listOf("Download books for the flight","Book the dentist")),Category("questions","Questions","Questions",listOf("Why does this happen?","How does it work?")))
+    @Test fun kotlinAndSqlUseCodeCategoryWithoutCatchingOrdinaryInstructions() {
+        val classifier=TextClassifier(null)
+        classifier.configure(classes+Category("junk","Junk / code","Code"),emptyList())
+        listOf("val x = listOf(1,2,3).map { it * 2 }", "val x: Int = 2", "fun greet(name: String) = name",
+            "suspend fun load() { return 1 }", "SELECT * FROM notes;", "select title, body from notes where id = 1",
+            "INSERT INTO notes VALUES (1)", "UPDATE notes SET title = 'Hi'").forEach {
+            assertEquals(it,"junk",classifier.classify(Message(text=it)).category)
+        }
+        listOf("Select a birthday gift from the shop", "Fun things to try", "Val will call tomorrow", "Update my set of flashcards").forEach {
+            assertNotEquals(it,"Code or placeholder text.",classifier.classify(Message(text=it)).reason)
+        }
+        classifier.configure(classes+Category("junk","Junk / code","Code"),listOf(Message(text="SELECT * FROM notes;",category="ideas",approved=true)))
+        assertEquals("ideas",classifier.classify(Message(text="SELECT * FROM notes;")).category)
+    }
     @Test fun longNotesUseBoundedEncoderInputButFullTextForApprovedMatches() {
         var largest=0
         val encoder=object:SentenceEncoder {

@@ -23,7 +23,7 @@ class TextClassifier(private val encoder: SentenceEncoder?, private val timing: 
     private val idea = Regex("\\b(what if|we could|idea for|idea:|maybe (we|i|try|build)|how about|could (build|make|add|create))\\b", RegexOption.IGNORE_CASE)
     private val question = Regex("^(who|what|when|where|why|how|which)\\b|^(is|are|can|does|do|should|would|will) (this|that|it|the|a|i|we|you)\\b", RegexOption.IGNORE_CASE)
     private val task = Regex("^(todo\\b|remember to|remind me|(?:i|we) (?:need|have|want) to|buy|send|email|call|book|schedule|finish|fix|pay|submit|write|read|review|update|clean|check|make|prepare|apply|order|download|install|pick up|follow up|learn|watch|take|highlight)\\b", RegexOption.IGNORE_CASE)
-    private val code = Regex("```|^\\s*(def \\w+\\(|class \\w+[:(]|(?:const|let|var) \\w+\\s*=|function |Traceback|<[/]?\\w+)|=>", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE))
+    private val code = Regex("```|^\\s*(def \\w+\\(|class \\w+[:(]|(?:const|let|var|val) \\w+(?:\\s*:\\s*[^=\\n]+)?\\s*=|(?:suspend )?fun (?:<[^>\\n]+>\\s*)?[\\w.]+\\s*\\(|function |Traceback|<[/]?\\w+)|=>|^\\s*SELECT\\s+(?:DISTINCT\\s+)?(?:\\*|[\\w.]+(?:\\s*,\\s*[\\w.]+)*)\\s+FROM\\s+[\\w.]+\\b|^\\s*(?:INSERT\\s+INTO\\s+\\w+\\s*(?:\\(|VALUES\\b|SELECT\\b)|DELETE\\s+FROM\\s+\\w+\\s+(?:WHERE\\b|;)|CREATE\\s+TABLE\\s+\\w+\\s*\\(|UPDATE\\s+\\w+\\s+SET\\s+\\w+\\s*=)", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE))
     private val junk = Regex("^(asdf|qwerty|test test|[.]{3,})$|file attached|image omitted|IMG-\\d+", RegexOption.IGNORE_CASE)
 
     @Synchronized fun configure(classes: List<Category>, confirmations: List<Message>, saved: PersonalHead? = null, splits: Map<String, String> = emptyMap()) {

@@ -1,0 +1,1 @@
+Recognize Kotlin declarations and common SQL statements as code. Confirm passwords when creating encrypted workspace or model backups to catch typing mistakes.

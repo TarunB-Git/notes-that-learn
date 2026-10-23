@@ -594,18 +594,20 @@ class MainActivity : Activity(), UiColorSource {
             } catch(error:Exception) { runOnUiThread { tell(error.message ?: "Cannot restore this folder") } }
         }
     }
-    private fun password(title: String, action: (CharArray)->Unit) {
-        val input=EditText(this).apply { hint="Backup password · at least 8 characters"; inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD; setPadding(dp(20),dp(12),dp(20),dp(12)) }
-        dialog(title).setView(input).setNegativeButton("Cancel",null).setPositiveButton("Continue") { _,_->
-            val value=input.text.toString().toCharArray(); input.text.clear()
-            if(value.size<8) { value.fill('\u0000'); tell("Use at least eight characters"); return@setPositiveButton }
+    private fun password(title: String, confirm: Boolean = false, action: (CharArray)->Unit) {
+        val form=BackupPasswordForm(this,confirm)
+        val prompt=dialog(title).setView(form).setNegativeButton("Cancel",null).setPositiveButton("Continue",null).showTracked()
+        prompt.setOnDismissListener { form.clear(); dialogs.remove(prompt) }
+        prompt.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val value=form.readPassword() ?: return@setOnClickListener
+            prompt.dismiss()
             action(value)
-        }.showTracked()
+        }
     }
     private fun createBackup(modelOnly: Boolean=false) {
         if(modelOnly && shown?.model==null) { tell("No personal head has been adopted yet. Train & compare after approving examples, or create a full workspace backup."); return }
         menu(if(modelOnly)"Export personal weights" else "Back up workspace",listOf("Save ZIP · device or Drive","Share ZIP · Drive or another app")) { destination ->
-            password(if(modelOnly)"Encrypt model weights" else "Encrypt workspace backup") { secret ->
+            password(if(modelOnly)"Encrypt model weights" else "Encrypt workspace backup",confirm=true) { secret ->
                 work("Backup ready",false) {
                     try {
                         val original=engine!!.state
