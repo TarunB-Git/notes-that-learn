@@ -8,8 +8,8 @@ that learns from labels you confirm. No account or classification server require
 [![Checks](https://github.com/TarunB-Git/note-processing/actions/workflows/checks.yml/badge.svg)](https://github.com/TarunB-Git/note-processing/actions/workflows/checks.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-**[Download Android v1.5.1](https://github.com/TarunB-Git/note-processing/releases/tag/v1.5.1)**
-· [Google-free APK](https://github.com/TarunB-Git/note-processing/releases/download/v1.5.1/note-chat-v1.5.1-fdroid-arm64.apk)
+**[Download Android v1.5.2](https://github.com/TarunB-Git/note-processing/releases/tag/v1.5.2)**
+· [Google-free APK](https://github.com/TarunB-Git/note-processing/releases/download/v1.5.2/note-chat-v1.5.2-fdroid-arm64.apk)
 · [First five minutes](docs/getting-started.md)
 · [Build and contribute](CONTRIBUTING.md)
 

@@ -17,6 +17,9 @@ await check('the demo handles distinct everyday intentions with the built-in pat
     ['Why do leaves change color?', 'questions'],
     ['https://example.org/books', 'links'],
     ['const value = 42;', 'junk'],
+    ['val x = listOf(1,2,3).map { it * 2 }', 'junk'],
+    ['fun greet(name: String) = name', 'junk'],
+    ['SELECT * FROM notes;', 'junk'],
     ['The client approved the revised roadmap.', 'work'],
   ];
   for (const [text, label] of examples) assert.equal((await classifier.predict(text)).label, label);

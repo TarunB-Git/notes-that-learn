@@ -1063,8 +1063,10 @@ h1 em {
 }
 .evidence-actions {
   display:flex;
-  flex-direction:column;
-  align-items:flex-end;
+  flex-direction:row;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:flex-end;
   gap:13px
 }
 .evidence-actions a {
@@ -1537,7 +1539,8 @@ dialog a {
   }
   .evidence-actions {
     grid-column:1/-1;
-    align-items:flex-start
+    align-items:center;
+    justify-content:flex-start
   }
   .evidence-number strong {
     font-size:33px
@@ -1663,8 +1666,37 @@ dialog a {
 .fdroid-status strong { font-size:14px }
 .fdroid-status p,.fdroid-status a { font-size:12px; line-height:1.7 }
 .fdroid-status svg { width:14px; height:14px; vertical-align:middle }
-@media (max-width:600px) {
-  .header-downloads { gap:5px; max-width:165px }
-  .header-downloads .header-download { padding:6px 8px; min-height:32px; font-size:10px }
-  .download-options { gap:10px }
+/* Keep short actions together; wrap whole controls only when needed. */
+.site-header { height:auto; min-height:104px; flex-wrap:wrap; padding-block:18px; gap:16px 24px }
+.site-header nav { flex-wrap:wrap; align-items:center; gap:12px 20px }
+.header-downloads { flex-wrap:nowrap; flex-shrink:0; gap:16px }
+.header-download,.button,.quiet-link,.evidence-actions a { white-space:nowrap; flex-shrink:0 }
+.evidence-actions a { min-height:44px }
+.download-options { gap:12px; align-items:stretch }
+.download-options .button { margin:0; gap:10px }
+.download-options { margin-top:20px }
+.evidence-strip { grid-template-columns:minmax(0,1.6fr) .6fr .6fr minmax(230px,1.1fr) }
+.site-footer>div { flex-wrap:wrap; row-gap:14px }
+@media (max-width:1080px) and (min-width:761px) {
+  .site-header { display:grid; grid-template-columns:1fr auto }
+  .site-header nav { grid-column:1/-1; grid-row:2; justify-content:center }
+  .evidence-actions { grid-column:1/-1 }
+  .evidence-strip { grid-template-columns:1.6fr .6fr .6fr }
+}
+@media (max-width:760px) {
+  .site-header { display:grid; grid-template-columns:1fr auto; min-height:0; gap:14px }
+  .header-downloads { grid-column:1/-1; grid-row:2; justify-content:flex-start; max-width:none; gap:20px }
+  .site-header nav { grid-column:2; grid-row:1; justify-content:flex-end }
+  .site-header nav .portfolio-link { font-size:11px; min-height:44px }
+  .header-downloads .header-download { min-height:44px; padding:8px 0; font-size:12px }
+  .evidence-strip { grid-template-columns:1fr 1fr }
+  .evidence-actions { flex-direction:row; justify-content:flex-start; gap:16px }
+  .download-options .button { padding:13px 15px }
+}
+@media (max-width:360px) {
+  .site-header .brand { font-size:20px; gap:6px }
+  .site-header .brand img { width:29px; height:29px }
+  .site-header nav .portfolio-link { font-size:10px; gap:4px }
+  .download-options { gap:8px }
+  .download-options .button { font-size:11px; padding:12px }
 }

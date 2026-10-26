@@ -5,7 +5,7 @@ export const normalize = text => text.trim().replace(/\s+/gu, ' ').toLowerCase()
 const idea = /\b(what if|we could|idea for|idea:|maybe (we|i|try|build)|how about|could (build|make|add|create))\b/i;
 const question = /^(who|what|when|where|why|how|which)\b|^(is|are|can|does|do|should|would|will) (this|that|it|the|a|i|we|you)\b/i;
 const task = /^(todo\b|remember to|remind me|(?:i|we) (?:need|have|want) to|buy|send|email|call|book|schedule|finish|fix|pay|submit|write|read|review|update|clean|check|make|prepare|apply|order|download|install|pick up|follow up|learn|watch|take|highlight)\b/i;
-const code = /```|^\s*(def \w+\(|class \w+[:(]|(?:const|let|var) \w+\s*=|function |Traceback|<[/]?\w+)|=>/im;
+const code = new RegExp("```|^\\s*(def \\w+\\(|class \\w+[:(]|(?:const|let|var|val) \\w+(?:\\s*:\\s*[^=\\n]+)?\\s*=|(?:suspend )?fun (?:<[^>\\n]+>\\s*)?[\\w.]+\\s*\\(|function |Traceback|<[/]?\\w+)|=>|^\\s*SELECT\\s+(?:DISTINCT\\s+)?(?:\\*|[\\w.]+(?:\\s*,\\s*[\\w.]+)*)\\s+FROM\\s+[\\w.]+\\b|^\\s*(?:INSERT\\s+INTO\\s+\\w+\\s*(?:\\(|VALUES\\b|SELECT\\b)|DELETE\\s+FROM\\s+\\w+\\s+(?:WHERE\\b|;)|CREATE\\s+TABLE\\s+\\w+\\s*\\(|UPDATE\\s+\\w+\\s+SET\\s+\\w+\\s*=)", 'im');
 const junk = /^(asdf|qwerty|test test|[.]{3,})$|file attached|image omitted|IMG-\d+/i;
 const link = /(?<![\p{L}\p{N}_@])(?:https?:\/\/[^\s<>]+|(?:www\.)?(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+[\p{L}]{2,63}(?::\d{1,5})?(?:[/#?][^\s<>]*)?)/iu;
 const encoder = new TextEncoder();
