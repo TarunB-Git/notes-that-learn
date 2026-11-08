@@ -1,0 +1,7 @@
+Get it on F-Droid badge
+Copyright: F-Droid artwork contributors
+Source: https://f-droid.org/badge/get-it-on.svg
+Artwork: https://gitlab.com/fdroid/artwork
+License: Creative Commons Attribution-ShareAlike 3.0 Unported
+https://creativecommons.org/licenses/by-sa/3.0/
+The badge is reproduced without changes.

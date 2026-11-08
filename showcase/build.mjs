@@ -27,7 +27,7 @@ const script = `const workerURL = URL.createObjectURL(new Blob([${JSON.stringify
 standalone = standalone.replace(/<meta http-equiv="Content-Security-Policy"[^>]+>/, `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline' blob:; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">`);
 standalone = standalone.replace('<link rel="stylesheet" href="style.css">', `<style>${css}</style>`);
 standalone = standalone.replace('<script type="module" src="app.mjs"></script>', () => `<script type="module">${script.replaceAll('</script', '<\\/script')}</script>`);
-for (const [asset, type] of [['icon.svg', 'image/svg+xml'], ['assets/android-inbox.png', 'image/png'], ['assets/android-notes.png', 'image/png']]) {
+for (const [asset, type] of [['icon.svg', 'image/svg+xml'], ['assets/get-it-on-fdroid.svg', 'image/svg+xml'], ['assets/android-inbox.png', 'image/png'], ['assets/android-notes.png', 'image/png']]) {
   const data = `data:${type};base64,${(await readFile(path.join(output, asset))).toString('base64')}`;
   standalone = standalone.replaceAll(`"${asset}"`, `"${data}"`);
 }

@@ -1675,6 +1675,12 @@ dialog a {
 .download-options { gap:12px; align-items:stretch }
 .download-options .button { margin:0; gap:10px }
 .download-options { margin-top:20px }
+.download-options .fdroid-badge { display:inline-flex; align-items:center; flex-shrink:0; border-radius:6px }
+.fdroid-badge img { display:block; width:165px; height:auto }
+.fdroid-badge:focus-visible { outline:2px solid var(--green); outline-offset:4px }
+.fdroid-status p { margin-block:8px }
+.fdroid-status-links { display:flex; flex-wrap:wrap; gap:8px 18px }
+.fdroid-status-links a { display:inline-flex; align-items:center; min-height:44px; gap:6px }
 .evidence-strip { grid-template-columns:minmax(0,1.6fr) .6fr .6fr minmax(230px,1.1fr) }
 .site-footer>div { flex-wrap:wrap; row-gap:14px }
 @media (max-width:1080px) and (min-width:761px) {

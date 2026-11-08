@@ -270,7 +270,7 @@ function showStep(name) {
   for (const node of document.querySelectorAll('[data-step]')) { node.classList.toggle('active', node.dataset.step === name); node.setAttribute('aria-pressed', String(node.dataset.step === name)); }
   const heading = element('div');
   const source = element('a', '', `Explore ${data.path}`);
-  source.href = `https://github.com/TarunB-Git/note-processing/blob/main/${data.link}`;
+  source.href = `https://github.com/TarunB-Git/notes-that-learn/blob/main/${data.link}`;
   source.append(icon('diagonal'));
   heading.append(element('h3', '', data.title), source);
   const description = element('div');
