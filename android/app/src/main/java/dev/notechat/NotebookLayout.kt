@@ -14,6 +14,11 @@ data class NotebookLayout(val mode: String = "default", val columns: List<TableC
     fun withTitles(titles: List<String>): NotebookLayout = copy(columns = titles.mapIndexed { i, title ->
         TableColumn(columns.getOrNull(i)?.id ?: UUID.randomUUID().toString(), title.trim())
     }).checked()
+    fun addColumn(title: String, id: String = UUID.randomUUID().toString()): NotebookLayout = copy(columns=columns+TableColumn(id,title.trim())).checked()
+    fun renameColumn(id: String, title: String): NotebookLayout {
+        require(columns.any { it.id==id })
+        return copy(columns=columns.map { if(it.id==id)it.copy(title=title.trim()) else it }).checked()
+    }
 }
 fun ChatState.notebook(route: String): NotebookLayout = if(route.startsWith("chat:"))
     chats.firstOrNull { it.id == route.removePrefix("chat:") }?.layout ?: NotebookLayout()

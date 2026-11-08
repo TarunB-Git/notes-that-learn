@@ -74,8 +74,9 @@ Checklist, or Table. You can also choose a layout when creating it. Switching
 layouts keeps the notes. Custom checklists keep checked items visible; the built-in
 To-do category continues to archive completed tasks after 24 hours.
 
-Tables have editable column names and cells. Tap a cell to edit a row, use
-**Add row** for a new one, and hold a row for message actions. Small tables fit
+Tables have editable column names and cells. Tap a heading to rename it, or **+**
+to add a column. Send a message with the normal composer to create a row, tap
+a cell to edit its fields, and hold a row for message actions. Small tables fit
 the screen; wider ones scroll sideways with aligned headers. There are no formulas.
 Table cell values and layout settings remain in backups and the Markdown folder.
 

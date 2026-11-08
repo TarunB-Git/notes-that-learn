@@ -96,6 +96,13 @@ class MainActivity : Activity(), UiColorSource {
     private var guideProgress=GuideProgress()
     private val drafts=mutableMapOf<String,ComposerDraft>()
     private var homeTab="home"
+    private var homePager: HomePager?=null
+    private val homeLists=mutableMapOf<String,RecyclerView>()
+    private var homeBar: View?=null
+    private var homeTabBar: View?=null
+    private var screenSlide: ScreenSlide?=null
+    private val navigationHistory=mutableListOf<String>()
+    private var backNavigation=false
     private var pendingCaret: Int?=null
     private var forwardAction: (List<Message>)->Unit = ::forwardMessages
     private var guideReveal=false
@@ -279,7 +286,10 @@ class MainActivity : Activity(), UiColorSource {
         }
         if(android.os.Build.VERSION.SDK_INT>=33)registerReceiver(noisyReceiver,android.content.IntentFilter(android.media.AudioManager.ACTION_AUDIO_BECOMING_NOISY),Context.RECEIVER_NOT_EXPORTED) else { @Suppress("DEPRECATION") registerReceiver(noisyReceiver,android.content.IntentFilter(android.media.AudioManager.ACTION_AUDIO_BECOMING_NOISY)) }
         noisyRegistered=true
-        savedInstanceState?.let { pendingCategoryPhoto=it.getString("categoryPhoto"); restoredNavigation=Navigation(it.getString("screen","home"),it.getString("anchor"),it.getInt("index"),it.getInt("offset"),it.getInt("scroll")) }
+        savedInstanceState?.let {
+            pendingCategoryPhoto=it.getString("categoryPhoto"); restoredNavigation=Navigation(it.getString("screen","home"),it.getString("anchor"),it.getInt("index"),it.getInt("offset"),it.getInt("scroll"))
+            navigationHistory.addAll(it.getStringArrayList("backStack").orEmpty())
+        }
         captureIntent(intent)
         if(!TranscriptionService.active())cacheDir.listFiles()?.filter { it.name.startsWith("transcribe-audio-") }?.forEach { it.delete() }
         cacheDir.listFiles()?.filter { file -> listOf("record-","play-","restore-","import-","ocr-").any { file.name.startsWith(it) } }?.forEach { it.deleteRecursively() }
@@ -329,6 +339,7 @@ class MainActivity : Activity(), UiColorSource {
     override fun onSaveInstanceState(outState: Bundle) {
         val location=capturePosition()
         outState.putString("categoryPhoto",pendingCategoryPhoto)
+        outState.putStringArrayList("backStack",ArrayList(navigationHistory))
         outState.putString("screen",location.route); outState.putString("anchor",location.anchor)
         outState.putInt("index",location.index); outState.putInt("offset",location.offset); outState.putInt("scroll",location.scroll)
         super.onSaveInstanceState(outState)
@@ -338,6 +349,7 @@ class MainActivity : Activity(), UiColorSource {
         super.onPause()
     }
     override fun onStop() {
+        screenSlide?.finish(); homePager?.dispose()
         flushNoteAutosave()
         super.onStop(); resumed=false; sessionGeneration++; autoUnlockAttempted=false; handler.removeCallbacks(archiveTick); handler.removeCallbacks(markdownTick); handler.removeCallbacks(projections); pendingChanges.clear(); cancelSplit(false); activeOverflow?.dismiss(); activeOverflow=null
         stopPlayback()
@@ -359,6 +371,7 @@ class MainActivity : Activity(), UiColorSource {
         }
     }
     override fun onDestroy() {
+        screenSlide?.finish(); homePager?.dispose()
         if(transcriptionReceiverRegistered) { unregisterReceiver(transcriptionReceiver); transcriptionReceiverRegistered=false }
         super.onDestroy(); if(noisyRegistered) { unregisterReceiver(noisyReceiver); noisyRegistered=false }; handler.removeCallbacksAndMessages(null); stopPlayback(); if(recorder!=null) stopRecording(false)
         worker.execute { vault.close(); encoder?.close(); encoder=null }; worker.shutdown(); modWorker.shutdown()
@@ -434,6 +447,10 @@ class MainActivity : Activity(), UiColorSource {
             manager.scrollToPositionWithOffset((if(anchor>=0)anchor else location.index).coerceIn(0,recycler.adapter!!.itemCount-1),location.offset)
         }
         if(followLatest && viewport!=null) { followLatest=false; viewport!!.goLatest() }
+        else if(followLatest && state.notebook(route).mode=="table" && recycler!=null) {
+            followLatest=false
+            recycler.scrollToPosition(((recycler.adapter?.itemCount ?: 1)-1).coerceAtLeast(0))
+        }
         if(location!=null)(0 until root.childCount).map { root.getChildAt(it) }.filterIsInstance<ScrollView>().firstOrNull()?.let { it.post { it.scrollTo(0,location.scroll) } }
         pendingJump?.let { id->
             pendingJump=null
@@ -954,9 +971,24 @@ class MainActivity : Activity(), UiColorSource {
             runCatching { persistState(current.state) }
         } }
     }
+    private fun navigateBack(fallback:String) {
+        backNavigation=true
+        navigate(navigationHistory.lastOrNull() ?: fallback)
+    }
     private fun navigate(destination:String) {
+        val goingBack=backNavigation; backNavigation=false
         if(recorder!=null) { toast("Send or cancel the recording first"); return }
+        if(destination in setOf("home","chats") && route in setOf("home","chats") && homePager!=null) {
+            if(destination==route) { render(); saveSession() }
+            else homePager!!.select(if(destination=="chats")1 else 0)
+            return
+        }
         if(destination!=route) {
+            if(goingBack) {
+                val previous=navigationHistory.lastIndexOf(destination)
+                if(previous>=0)while(navigationHistory.size>previous)navigationHistory.removeAt(navigationHistory.lastIndex)
+            } else navigationHistory.add(route)
+            pendingBackSlide=goingBack
             flushNoteAutosave()
             rememberDraft()
             cancelSplit(false)
@@ -969,6 +1001,7 @@ class MainActivity : Activity(), UiColorSource {
         render()
         saveSession()
     }
+    private var pendingBackSlide=false
     private fun render() {
         val state=shown ?: return
         val keepFocus=editor?.hasFocus()==true
@@ -982,6 +1015,11 @@ class MainActivity : Activity(), UiColorSource {
         if(renderedRoute.isNotBlank() && (list!=null || root.childCount>0))positions[renderedRoute]=capturePosition()
         val changed=route!=renderedRoute
         if(!changed && editor!=null && pendingCaret==null)pendingCaret=cursor
+        screenSlide?.finish()
+        val slide=changed && !themeChanged && renderedRoute.isNotEmpty() && android.animation.ValueAnimator.areAnimatorsEnabled()
+        val goingBack=pendingBackSlide; pendingBackSlide=false
+        if(slide) { if(screenSlide==null)screenSlide=ScreenSlide(root); screenSlide!!.capture() }
+        homePager?.dispose(); homePager=null; homeLists.clear(); homeBar=null; homeTabBar=null
         root.animate().cancel(); root.alpha=1f; root.translationX=0f
         root.removeAllViews(); editor=null; list=null; viewport=null; overflowAnchor=null; headerView=null
         splitLines=null; composerContent=null; recordButton=null; recordingClock=null; recordingWave=null; modelStatus=null; voiceViews.clear()
@@ -1001,13 +1039,7 @@ class MainActivity : Activity(), UiColorSource {
         guidePanel()
         restorePosition(state)
         if(!changed && keepFocus && selected.isEmpty() && !searchMode)editor?.let { it.requestFocus(); it.setSelection(cursor.coerceIn(0,it.length())) }
-        if(changed && !themeChanged && renderedRoute.isNotEmpty() && android.animation.ValueAnimator.areAnimatorsEnabled()) {
-            // Keep navigation chrome still; a brief content fade avoids whole-screen sliding.
-            for(i in 0 until root.childCount)root.getChildAt(i).takeUnless { it===headerView }?.apply {
-                alpha=.82f
-                animate().alpha(1f).setDuration(120).setInterpolator(android.view.animation.PathInterpolator(.4f,0f,.2f,1f)).start()
-            }
-        }
+        if(slide)screenSlide?.start(goingBack)
         if(themeChanged && android.animation.ValueAnimator.areAnimatorsEnabled()) {
             // Fade the new palette in over its previous surface; respect Android's animation setting.
             window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(oldColors!!.surface))
@@ -1021,29 +1053,51 @@ class MainActivity : Activity(), UiColorSource {
         val next=if(shown?.preferences?.frontend=="notes")"chat" else "notes"
         fast(preview={ it.state=it.state.copy(preferences=it.state.preferences.copy(frontend=next)) })
     }
-    private fun home(state:ChatState) {
-        val privateTab=route=="chats"
-        homeTab=route
+    private fun homeHeader(state:ChatState,privateTab:Boolean):View {
         val bar=row().apply { setPadding(dp(16),dp(8),dp(8),dp(8)) }
         bar.addView(label(if(privateTab)"Chats" else if(state.preferences.frontend=="notes")"All notes" else "Note Chat",25,if(state.preferences.frontend=="notes")ink else green,true),LinearLayout.LayoutParams(0,dp(48),1f))
         bar.addView(icon("add",if(privateTab)"New private chat" else "Add category") { if(privateTab)newChat() else editCategory(null) }.apply { setTag(R.id.guide_target,if(privateTab)"new-chat" else "add-category") })
         bar.addView(icon("switch",if(state.preferences.frontend=="notes")"Switch to Chat mode" else "Switch to Notes mode") { switchFrontend() })
         bar.addView(icon("settings","Settings") { navigate("settings") })
         bar.addView(icon("more","More options") { homeMenu() }.also { overflowAnchor=it })
-        root.addView(bar)
+        return bar
+    }
+    private fun home(state:ChatState) {
+        val privateTab=route=="chats"
+        homeTab=route
+        homeBar=homeHeader(state,privateTab).also { root.addView(it) }
         searchBox()
+        val pages=listOf("home","chats").map { target->homePage(state,target) }
+        val pager=HomePager(this,pages,if(privateTab)1 else 0) { index->
+            if(resumed && shown!=null && route in setOf("home","chats")) {
+                val target=if(index==1)"chats" else "home"
+                positions[route]=capturePosition(route)
+                route=target; homeTab=target; renderedRoute=target; list=homeLists[target]
+                homeBar?.let { root.removeView(it) }
+                homeBar=homeHeader(shown ?: state,index==1).also { root.addView(it,0) }
+                homeTabBar?.let { root.removeView(it) }; homeTabs(index==1)
+                guidePanel()
+                saveSession()
+            }
+        }
+        homePager=pager
+        list=homeLists[route]
+        root.addView(pager,LinearLayout.LayoutParams(-1,0,1f))
+        homeTabs(privateTab)
+        homeLists.forEach { (target,view)->
+            positions[target]?.let { location->(view.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(location.index,location.offset) }
+        }
+    }
+    private fun homePage(state:ChatState,target:String):View {
+        val privateTab=target=="chats"
         if(state.preferences.frontend=="notes") {
-            val boards=NoteBoard(this,state,colors,markdown,privateTab,query,{ target -> if(target=="new-chat")newChat() else navigate(target) },{ target ->
+            return NoteBoard(this,state,colors,markdown,privateTab,query,{ destination->if(destination=="new-chat")newChat() else navigate(destination) },{ destination->
                 when {
-                    target.startsWith("chat:")->state.chats.firstOrNull { "chat:${it.id}"==target }?.let(::privateChatMenu)
-                    state.categories.any { it.id==target }->categoryMenu(state.categories.first { it.id==target })
-                    else->navigate(target)
+                    destination.startsWith("chat:")->state.chats.firstOrNull { "chat:${it.id}"==destination }?.let(::privateChatMenu)
+                    state.categories.any { it.id==destination }->categoryMenu(state.categories.first { it.id==destination })
+                    else->navigate(destination)
                 }
-            })
-            list=boards
-            root.addView(HomeSwipe(this) { direction->switchHomeTab(direction) }.apply { addView(boards) },LinearLayout.LayoutParams(-1,0,1f))
-            homeTabs(privateTab)
-            return
+            }).also { homeLists[target]=it }
         }
         val active=state.messages.filter { it.visible() }
         val inbox=active.filter { it.inInbox(state.preferences) }
@@ -1081,13 +1135,11 @@ class MainActivity : Activity(), UiColorSource {
                 holder.box.addView(View(this@MainActivity).apply { setBackgroundColor(colors.divider) },LinearLayout.LayoutParams(-1,dp(1)).apply { leftMargin=dp(84) })
             }
         }
-        list=recycler
-        root.addView(HomeSwipe(this) { direction->switchHomeTab(direction) }.apply { addView(recycler) },LinearLayout.LayoutParams(-1,0,1f))
-        if(privateTab && rows.isEmpty())root.addView(action("Create a private chat",::newChat,false).apply { setTag(R.id.guide_target,"new-chat") })
-        homeTabs(privateTab)
-    }
-    private fun switchHomeTab(direction: Int) {
-        if(route=="home" && direction>0)navigate("chats") else if(route=="chats" && direction<0)navigate("home")
+        homeLists[target]=recycler
+        return column().apply {
+            addView(recycler,LinearLayout.LayoutParams(-1,0,1f))
+            if(privateTab && rows.isEmpty())addView(action("Create a private chat",::newChat,false).apply { setTag(R.id.guide_target,"new-chat") })
+        }
     }
     private fun homeTabs(privateTab: Boolean) {
         val tabs=row().apply { setPadding(dp(12),dp(4),dp(12),dp(4)); setBackgroundColor(colors.surface) }
@@ -1102,7 +1154,7 @@ class MainActivity : Activity(), UiColorSource {
             tab.addView(label(name,12,if(active)ink else muted,active).apply { gravity=Gravity.CENTER; setPadding(0,dp(4),0,0) })
             tabs.addView(tab,LinearLayout.LayoutParams(0,dp(66),1f))
         }
-        root.addView(tabs)
+        homeTabBar=tabs; root.addView(tabs)
     }
     private fun homeMenu() { overflow(listOf("New private chat","Import TXT / Markdown / ZIP","Reclassify all","Starred notes","Manage categories","Settings")) { when(it) { 0->newChat(); 1->pickText(); 2->reclassifyAll(); 3->navigate("starred"); 4->navigate("categories"); 5->navigate("settings") } } }
     private fun messages(state:ChatState,includeSearch:Boolean=true)=state.messages.filter { it.visible() && when(route) {
@@ -1142,10 +1194,29 @@ class MainActivity : Activity(), UiColorSource {
         val current=messages(state)
         selected.retainAll(current.map { it.id }.toSet())
         if(selected.isNotEmpty())selectionToolbar(state)
-        else toolbar(title(state),"Tap a cell to edit",{ navigate(homeTab) },listOf("add" to { editTableRow(null) },"more" to { chatMenu() }))
-        val table=NotebookTable(this,state.notebook(route),current,colors,selected,{ message,column->editTableRow(message,column) },{ toggleSelection(it.id) })
+        else toolbar(title(state),"Tap a cell or heading to edit",{ navigateBack(homeTab) },listOf("more" to { chatMenu() }))
+        val target=route
+        val table=NotebookTable(this,state.notebook(route),current,colors,selected,{ message,column->editTableRow(message,column) },{ toggleSelection(it.id) },
+            { column->tableColumnName(target,column) },{ tableColumnName(target) })
         list=table.recycler; root.addView(table,LinearLayout.LayoutParams(-1,0,1f))
-        root.addView(action("Add row",{ editTableRow(null) },false))
+        composer(state)
+        if(selected.isNotEmpty())composerRoot?.visibility=View.INVISIBLE
+    }
+    private fun tableColumnName(target:String,column:TableColumn?=null) {
+        if(column==null && shown!!.notebook(target).columns.size>=12) { tell("Tables can have up to 12 columns"); return }
+        val field=EditText(this).apply { setSingleLine(); hint="Column name"; contentDescription="Column name"; setText(column?.title.orEmpty()); setSelectAllOnFocus(true) }
+        val prompt=dialog(if(column==null)"Add column" else "Rename column").setView(field).setNegativeButton("Cancel",null).setPositiveButton("Save",null).showTracked()
+        prompt.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val name=field.text.toString().trim()
+            if(name.isEmpty() || name.length>60) { field.error="Use 1–60 characters"; return@setOnClickListener }
+            prompt.dismiss()
+            val addedId=UUID.randomUUID().toString()
+            fast(preview={ engine ->
+                val current=engine.state.notebook(target)
+                engine.setNotebook(target,if(column==null)current.addColumn(name,addedId) else current.renameColumn(column.id,name))
+            })
+        }
+        field.requestFocus()
     }
     private fun editTableRow(message:Message?,focus:String="note") {
         val layout=shown!!.notebook(route)
@@ -1195,7 +1266,7 @@ class MainActivity : Activity(), UiColorSource {
         if(selected.isNotEmpty()) selectionToolbar(state)
         else if(searchMode) searchToolbar(current)
         else if(state.preferences.frontend=="notes" && editTarget!=null)toolbar(title(state),"Editing note",{ cancelEdit() },listOf("check" to { saveEdit() }))
-        else toolbar(title(state),"",{ navigate(homeTab) },listOf("search" to { beginSearch() },"more" to { chatMenu() }))
+        else toolbar(title(state),"",{ navigateBack(homeTab) },listOf("search" to { beginSearch() },"more" to { chatMenu() }))
         if(!searchMode)pinnedBar(current)
         val recycler=recycler().apply { setBackgroundColor(if(state.preferences.frontend=="notes")colors.surface else paper) }
         val manager=recycler.layoutManager as LinearLayoutManager
@@ -1411,7 +1482,7 @@ class MainActivity : Activity(), UiColorSource {
         if(list?.adapter !is MessageRows || headerView==null) { render(); return }
         val index=root.indexOfChild(headerView)
         root.removeView(headerView)
-        if(selected.isNotEmpty())selectionToolbar(state) else toolbar(title(state),"",{ navigate(homeTab) },listOf("search" to { beginSearch() },"more" to { chatMenu() }))
+        if(selected.isNotEmpty())selectionToolbar(state) else toolbar(title(state),"",{ navigateBack(homeTab) },listOf("search" to { beginSearch() },"more" to { chatMenu() }))
         val next=headerView ?: return; root.removeView(next); root.addView(next,index.coerceAtLeast(0))
         composerRoot?.visibility=if(selected.isEmpty())View.VISIBLE else View.INVISIBLE
         (list?.adapter as? MessageRows)?.selectionChanged(changed)
@@ -1590,7 +1661,7 @@ class MainActivity : Activity(), UiColorSource {
         setting(content,"User guide","Walk through capture, corrections, private chats, backups, and MODs") { navigate("guide") }
     }
     private fun settingsBody(title:String): LinearLayout {
-        toolbar(title,"",{ navigate(if(route=="settings")"home" else "settings") })
+        toolbar(title,"",{ navigateBack(if(route=="settings")homeTab else "settings") })
         val scroll=ScrollView(this); val content=column().apply { setPadding(dp(16),dp(12),dp(16),dp(24)) }
         scroll.addView(content); root.addView(scroll,LinearLayout.LayoutParams(-1,0,1f)); return content
     }
@@ -1671,6 +1742,7 @@ class MainActivity : Activity(), UiColorSource {
         if(view is ViewGroup)for(index in 0 until view.childCount)yieldAll(descendants(view.getChildAt(index)))
     }
     private fun guidePanel() {
+        (0 until root.childCount).map { root.getChildAt(it) }.filterIsInstance<GuideCoach>().forEach { root.removeView(it) }
         guideAnchor?.foreground=guideForeground
         guideAnchor=null; guideForeground=null
         if(!guideProgress.active || route=="guide")return
@@ -1694,10 +1766,9 @@ class MainActivity : Activity(), UiColorSource {
     }
     private fun refreshBoards() {
         val state=shown ?: return
-        val old=list as? NoteBoard ?: return
-        val container=old.parent as? ViewGroup ?: return
-        val replacement=NoteBoard(this,state,colors,markdown,route=="chats",query,{ target->if(target=="new-chat")newChat() else navigate(target) },{ target->state.chats.firstOrNull { "chat:${it.id}"==target }?.let(::privateChatMenu) ?: state.categories.firstOrNull { it.id==target }?.let(::categoryMenu) })
-        container.removeView(old); container.addView(replacement); list=replacement
+        val pager=homePager ?: return
+        listOf("home","chats").forEachIndexed { index,target->pager.replace(index,homePage(state,target)) }
+        list=homeLists[route]
     }
     private fun runMod(title: String, queued: Boolean=false, action: ()->Unit) {
         if(modBusy && !queued) { toast("A MOD is already working"); return }
@@ -1832,7 +1903,7 @@ class MainActivity : Activity(), UiColorSource {
             }.showTracked()
     }
     private fun modelScreen(state:ChatState) {
-        toolbar("Model & learning","On this phone",{ navigate("settings") })
+        toolbar("Model & learning","On this phone",{ navigateBack("settings") })
         val scroll=ScrollView(this); val content=column().apply { setPadding(dp(20),dp(12),dp(20),dp(24)) }; scroll.addView(content); root.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
         toggleSetting(content,"Automatic classification","Classify notes · private chats stay outside the model",state.preferences.classification) { enabled->
             work("") {
@@ -1869,7 +1940,7 @@ class MainActivity : Activity(), UiColorSource {
         content.addView(label("Encoder weights stay frozen. The personal head uses approved text; held-out labels stay outside training. Learning never runs on dislikes or predictions. No accuracy target is guaranteed; use fresh notes to measure progress.",13,muted))
     }
     private fun categories(state:ChatState) {
-        toolbar("Categories","One chat per category",{ navigate("settings") },listOf("add" to { editCategory(null) }))
+        toolbar("Categories","One chat per category",{ navigateBack("settings") },listOf("add" to { editCategory(null) }))
         (headerView as? ViewGroup)?.getChildAt((headerView as ViewGroup).childCount-1)?.setTag(R.id.guide_target,"add-category")
         val scroll=ScrollView(this); val content=column().apply { setPadding(dp(16),dp(10),dp(16),dp(20)) }; scroll.addView(content); root.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
         state.categories.forEach { c -> setting(content,c.title + if(c.pinned)" · pinned" else "",c.description) { categoryMenu(c) } }
@@ -1896,7 +1967,7 @@ class MainActivity : Activity(), UiColorSource {
         }.showTracked()
     }
     private fun deleted(state:ChatState) {
-        toolbar("Recently deleted","Recover within 90 days",{ navigate("settings") })
+        toolbar("Recently deleted","Recover within 90 days",{ navigateBack("settings") })
         val rows=state.messages.filter { it.deleted!=null && System.currentTimeMillis()-it.deleted<RETENTION_MS }.sortedByDescending { it.deleted }
         val recycler=recycler().apply { setBackgroundColor(paper) }
         recycler.adapter=object:RecyclerView.Adapter<RowHolder>() {
@@ -2158,7 +2229,7 @@ class MainActivity : Activity(), UiColorSource {
     private fun todoList(state: ChatState) {
         val current=messages(state,false)
         selected.retainAll(current.map { it.id }.toSet())
-        if(selected.isNotEmpty())selectionToolbar(state) else toolbar(title(state),"",{ navigate(homeTab) },listOf("search" to { beginSearch() },"more" to { chatMenu() }))
+        if(selected.isNotEmpty())selectionToolbar(state) else toolbar(title(state),"",{ navigateBack(homeTab) },listOf("search" to { beginSearch() },"more" to { chatMenu() }))
         pinnedBar(current)
         val recycler=recycler()
         recycler.adapter=MessageRows(this,current) { box,m,_ ->
@@ -2187,7 +2258,7 @@ class MainActivity : Activity(), UiColorSource {
     }
     private fun archived(state: ChatState) {
         val completed=route=="completed"
-        toolbar(if(completed)"Completed to-dos" else "Archived starred messages","",{ navigate("settings") })
+        toolbar(if(completed)"Completed to-dos" else "Archived starred messages","",{ navigateBack("settings") })
         val rows=state.messages.filter { it.deleted==null && if(completed)it.completedArchived() else it.starArchived() }
         val recycler=recycler(); recycler.adapter=object:RecyclerView.Adapter<RowHolder>() {
             override fun getItemCount()=rows.size
@@ -2397,18 +2468,20 @@ class MainActivity : Activity(), UiColorSource {
         if(splitTarget!=null) { cancelSplit(); return }
         if(selected.isNotEmpty()) { clearSelection(); return }
         if(searchMode) { searchMode=false; query=""; render(); return }
-        if(route in setOf("model","mods","guide","quiz") || route.startsWith("settings:")) { navigate("settings"); return }
-        if(route !in setOf("home","chats")) { navigate(homeTab) } else if(route=="chats")navigate("home") else super.onBackPressed()
+        if(route in setOf("model","mods","guide","quiz") || route.startsWith("settings:")) { navigateBack("settings"); return }
+        if(route !in setOf("home","chats")) { navigateBack(homeTab) } else if(route=="chats")navigate("home") else super.onBackPressed()
     }
     private fun searchBox() {
         val search=EditText(this).apply { hint="Search messages or categories"; textSize=15f; setSingleLine(); background=rounded(colors.inset,22); setText(query); setPadding(dp(18),dp(10),dp(18),dp(10)) }
-        search.addTextChangedListener(object:TextWatcher { override fun beforeTextChanged(s:CharSequence?,start:Int,count:Int,after:Int)=Unit; override fun onTextChanged(s:CharSequence?,start:Int,before:Int,count:Int) { query=s.toString(); if(shown?.preferences?.frontend=="notes" && route in setOf("home","chats"))refreshBoards() else list?.adapter?.notifyDataSetChanged() }; override fun afterTextChanged(s:Editable?)=Unit })
+        search.addTextChangedListener(object:TextWatcher { override fun beforeTextChanged(s:CharSequence?,start:Int,count:Int,after:Int)=Unit; override fun onTextChanged(s:CharSequence?,start:Int,before:Int,count:Int) { query=s.toString(); if(route in setOf("home","chats")) {
+            if(shown?.preferences?.frontend=="notes")refreshBoards() else homeLists.values.forEach { it.adapter?.notifyDataSetChanged() }
+        } else list?.adapter?.notifyDataSetChanged() }; override fun afterTextChanged(s:Editable?)=Unit })
         search.setOnEditorActionListener { _,_,_->(getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(search.windowToken,0); true }
         root.addView(search,LinearLayout.LayoutParams(-1,dp(46)).apply { leftMargin=dp(16); rightMargin=dp(16); bottomMargin=dp(8) })
     }
     private fun toolbar(title:String,subtitle:String,back:()->Unit,actions:List<Pair<String,()->Unit>> = emptyList()) {
         val bar=row().apply { setPadding(dp(4),dp(4),dp(4),dp(4)); setBackgroundColor(colors.surface) }
-        bar.addView(icon("back","Back",back)); val titles=column(); titles.addView(label(title,19,ink,true)); if(subtitle.isNotBlank())titles.addView(label(subtitle,12,muted)); bar.addView(titles,LinearLayout.LayoutParams(0,-2,1f)); actions.forEach { entry->bar.addView(icon(entry.first,entry.first,entry.second).also { if(entry.first=="more")overflowAnchor=it }) }; root.addView(bar); headerView=bar
+        bar.addView(icon("back","Back") { backNavigation=true; try { back() } finally { backNavigation=false } }); val titles=column(); titles.addView(label(title,19,ink,true)); if(subtitle.isNotBlank())titles.addView(label(subtitle,12,muted)); bar.addView(titles,LinearLayout.LayoutParams(0,-2,1f)); actions.forEach { entry->bar.addView(icon(entry.first,entry.first,entry.second).also { if(entry.first=="more")overflowAnchor=it }) }; root.addView(bar); headerView=bar
     }
     private fun setting(parent:LinearLayout,title:String,description:String,click:()->Unit) {
         val box=column().apply { setPadding(dp(4),dp(16),dp(4),dp(16)) }; box.addView(label(title,17,ink,true)); box.addView(label(description,14,muted).apply { setPadding(0,dp(6),0,0) }); box.setOnClickListener { click() }; when(title) { "Layout"->"layout"; "Permanent Markdown folder"->"markdown"; "Create encrypted backup"->"backup"; "Voice transcription"->"speech"; "Test with 10 notes"->"test-model"; else->null }?.let { box.setTag(R.id.guide_target,it) }; parent.addView(box)
@@ -2460,7 +2533,7 @@ class MainActivity : Activity(), UiColorSource {
     private fun action(title:String,click:()->Unit,solid:Boolean=true)=TextView(this).apply { text=title; textSize=if(solid)15f else 12f; gravity=Gravity.CENTER; setTextColor(if(solid)colors.onAccent else green); setPadding(dp(12),dp(9),dp(12),dp(9)); minimumHeight=dp(40); if(solid)background=rounded(green,20); setOnClickListener { click() }; isClickable=true; contentDescription=title }
     private fun dialog(title:String)=MaterialAlertDialogBuilder(this).setTitle(title)
     private fun trackDialog(dialog:Dialog) { dialogs.add(dialog); dialog.setOnDismissListener { dialogs.remove(dialog); if(imageDialog===dialog) { imageDialog=null; imageMessageId=null } } }
-    private fun AlertDialog.Builder.showTracked()=create().also { alert->trackDialog(alert); alert.show(); alert.window?.setWindowAnimations(R.style.DialogMotion); if(vault.lockedStorage)alert.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE) }
+    private fun AlertDialog.Builder.showTracked()=create().also { alert->trackDialog(alert); alert.show(); alert.window?.setWindowAnimations(R.style.DialogMotion); if(::vault.isInitialized && vault.lockedStorage)alert.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE) }
     private fun menu(title:String,options:List<String>,selected:(Int)->Unit) {
         val sheet=BottomSheetDialog(this)
         val scroll=ScrollView(this); val content=column().apply { setPadding(dp(20),dp(12),dp(20),dp(24)) }

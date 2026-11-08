@@ -12,6 +12,19 @@ import android.view.View
 @Config(sdk=[35],qualifiers="w320dp-h720dp-port-mdpi")
 class NotebookLayoutTest {
     private val categories=listOf(Category("work","Work","Work notes"),Category("todos","To-do","Tasks"))
+    @Test fun addingAndRenamingColumnsKeepTheExistingIdsAndValues() {
+        val row=Message(text="Rice",category="work",tableCells=mapOf("details" to "Brown rice"))
+        val engine=ChatEngine(ChatState(categories,listOf(row)))
+        val layout=NotebookLayout("table").renameColumn("note","Item").addColumn("Amount").renameColumn("details","Type")
+        engine.setNotebook("work",layout)
+        assertEquals(listOf("note","details"),layout.columns.take(2).map { it.id })
+        assertEquals(listOf("Item","Type","Amount"),layout.columns.map { it.title })
+        assertEquals(row,engine.state.messages.single())
+        assertEquals(layout,StateJson.decode(StateJson.encode(engine.state)).notebook("work"))
+        assertThrows(IllegalArgumentException::class.java) { layout.renameColumn("details","") }
+        val full=layout.withTitles((1..12).map { "Column $it" })
+        assertThrows(IllegalArgumentException::class.java) { full.addColumn("Too many") }
+    }
     @Test fun conversionPreservesEveryRowCellAndBackupState() {
         val row=Message(id="one",text="Book venue",category="work",tableCells=mapOf("details" to "Seats 40\nProjector needed"))
         val engine=ChatEngine(ChatState(categories,listOf(row)))

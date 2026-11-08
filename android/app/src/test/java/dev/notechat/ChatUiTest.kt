@@ -30,12 +30,13 @@ class ChatUiTest {
         Message(id="voice",attachment=Attachment("fixture","Voice message.m4a","audio/mp4",100,28000,listOf(4,18,8,32,11,26,5,21)),created=1791705780000)
     )
     private fun fixture(route:String="all"):Pair<MainActivity,LinearLayout> {
-        val activity=Robolectric.buildActivity(MainActivity::class.java).get()
+        val controller=Robolectric.buildActivity(MainActivity::class.java)
+        val activity=controller.get()
         activity.setTheme(R.style.AppTheme)
         val root=LinearLayout(activity).apply { orientation=LinearLayout.VERTICAL; setBackgroundColor(Color.WHITE) }
         activity.setContentView(root)
         field(activity,"persistState",{ _:ChatState -> Unit }); field(activity,"root",root); field(activity,"shown",ChatState(categories,messages)); field(activity,"engine",ChatEngine(ChatState(categories,messages))); field(activity,"route",route); field(activity,"resumed",true)
-        call(activity,"render"); layout(root)
+        call(activity,"render"); controller.visible(); layout(root)
         return activity to root
     }
     @Test fun movedPrivateNotesDoNotRemainVisibleThroughOldPublicReplyPreviews() {
@@ -564,7 +565,7 @@ class ChatUiTest {
         val notes=(0..4).map { Message(id="note-$it",text="Thought $it",category="thoughts") }
         val state=ChatState(categories,notes+Message(id="private",text="Private journal entry",chatId="journal"),preferences=Preferences(frontend="notes"),chats=listOf(Chat("journal","Journal"),Chat("reading","Reading")))
         field(activity,"shown",state); call(activity,"render"); layout(root)
-        val board=descendants(root).filterIsInstance<NoteBoard>().single()
+        val board=activeHome(activity) as NoteBoard
         val grid=board.layoutManager as androidx.recyclerview.widget.GridLayoutManager
         assertEquals(2,grid.spanCount)
         assertEquals(2,grid.spanSizeLookup.getSpanSize(0))
@@ -591,7 +592,7 @@ class ChatUiTest {
         field(activity,"shown",state.copy(preferences=Preferences(includePrivateChatsInInbox=true))); call(activity,"render"); layout(root)
         assertTrue(descendants(root).filterIsInstance<MessageText>().any { it.text.contains(private.text) })
         field(activity,"shown",state); field(activity,"route","home"); field(activity,"query",private.text); call(activity,"render"); layout(root)
-        assertEquals(0,descendants(root).filterIsInstance<androidx.recyclerview.widget.RecyclerView>().single().adapter!!.itemCount)
+        assertEquals(0,activeHome(activity).adapter!!.itemCount)
         field(activity,"route","chats"); call(activity,"render"); layout(root)
         val result=descendants(root).first { it.tag=="message:private" } as ViewGroup
         result.getChildAt(0).performClick(); layout(root)
@@ -623,15 +624,18 @@ class ChatUiTest {
         val (activity,root)=fixture("home")
         val state=ChatState(categories,messages,chats=(0..19).map { Chat("private-$it","Notebook $it") })
         field(activity,"shown",state); field(activity,"engine",ChatEngine(state)); call(activity,"render"); layout(root)
-        assertFalse(descendants(root).filterIsInstance<TextView>().any { it.text.toString()=="Notebook 0" })
-        descendants(root).first { it.contentDescription=="Chats tab" }.performClick(); layout(root)
-        assertTrue(descendants(root).filterIsInstance<TextView>().any { it.text.toString()=="Notebook 0" })
-        assertFalse(descendants(root).filterIsInstance<TextView>().any { it.text.toString()=="Thoughts" })
-        var list=descendants(root).filterIsInstance<androidx.recyclerview.widget.RecyclerView>().single()
+        assertFalse(descendants(activeHome(activity)).filterIsInstance<TextView>().any { it.text.toString()=="Notebook 0" })
+        fun tab(name:String) {
+            descendants(root).first { it.contentDescription=="$name tab" }.performClick()
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(1)); layout(root)
+        }
+        tab("Chats")
+        assertTrue(descendants(activeHome(activity)).filterIsInstance<TextView>().any { it.text.toString()=="Notebook 0" })
+        assertFalse(descendants(activeHome(activity)).filterIsInstance<TextView>().any { it.text.toString()=="Thoughts" })
+        val list=activeHome(activity)
         (list.layoutManager as androidx.recyclerview.widget.LinearLayoutManager).scrollToPositionWithOffset(10,-12); layout(root)
-        descendants(root).first { it.contentDescription=="Notes tab" }.performClick(); layout(root)
-        descendants(root).first { it.contentDescription=="Chats tab" }.performClick(); layout(root)
-        list=descendants(root).filterIsInstance<androidx.recyclerview.widget.RecyclerView>().single()
+        tab("Notes"); tab("Chats")
+        assertSame(list,activeHome(activity))
         assertEquals(10,(list.layoutManager as androidx.recyclerview.widget.LinearLayoutManager).findFirstVisibleItemPosition())
         capture(root,"private-tab")
     }
@@ -734,29 +738,76 @@ class ChatUiTest {
         val engine=MainActivity::class.java.getDeclaredField("engine").apply { isAccessible=true }.get(activity) as ChatEngine
         assertEquals(draft,engine.state.drafts["thoughts"])
     }
-    @Test fun homeSwipeSwitchesTabsButLeavesBoardPreviewAndVerticalGesturesAlone() {
+    @Test fun homePagesFollowTheDragAndOnlyCommitTheTabAfterSettling() {
         val (activity,root)=fixture("home")
         val state=ChatState(categories,messages,preferences=Preferences(frontend="notes"),chats=listOf(Chat("journal","Journal")))
         field(activity,"shown",state); field(activity,"engine",ChatEngine(state)); call(activity,"render"); layout(root)
-        layout(activity.window.decorView)
-        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(250))
-        layout(root)
-        val swipe=descendants(root).filterIsInstance<HomeSwipe>().single()
-        val preview=descendants(root).filterIsInstance<androidx.recyclerview.widget.RecyclerView>().first { (it.layoutManager as? androidx.recyclerview.widget.LinearLayoutManager)?.orientation==androidx.recyclerview.widget.RecyclerView.HORIZONTAL }
-        val bounds=android.graphics.Rect(); assertTrue(preview.getGlobalVisibleRect(bounds))
-        val density=root.resources.displayMetrics.density
-        fun event(action:Int,x:Float,y:Float)=android.view.MotionEvent.obtain(0,10,action,x,y,0)
-        val x=bounds.centerX().toFloat(); val y=bounds.centerY().toFloat()
-        event(android.view.MotionEvent.ACTION_DOWN,x,y).also { assertFalse(swipe.onInterceptTouchEvent(it)); it.recycle() }
-        event(android.view.MotionEvent.ACTION_MOVE,x-100*density,y).also { assertFalse(swipe.onInterceptTouchEvent(it)); it.recycle() }
-        event(android.view.MotionEvent.ACTION_DOWN,300*density,1f).also { assertFalse(swipe.onInterceptTouchEvent(it)); it.recycle() }
-        event(android.view.MotionEvent.ACTION_MOVE,200*density,100*density).also { assertFalse(swipe.onInterceptTouchEvent(it)); it.recycle() }
-        event(android.view.MotionEvent.ACTION_DOWN,300*density,1f).also { swipe.onInterceptTouchEvent(it); it.recycle() }
-        event(android.view.MotionEvent.ACTION_MOVE,190*density,1f).also { assertTrue(swipe.onInterceptTouchEvent(it)); it.recycle() }
-        event(android.view.MotionEvent.ACTION_UP,190*density,1f).also { assertTrue(swipe.onTouchEvent(it)); it.recycle() }
-        layout(root)
-        assertTrue(descendants(root).any { it.contentDescription=="Open Journal board" })
-        assertFalse(descendants(root).any { it.contentDescription=="Open Inbox board" })
+        val home=descendants(root).filterIsInstance<HomePager>().single()
+        val pager=home.pager
+        assertTrue(pager.beginFakeDrag())
+        pager.fakeDragBy(-pager.width*.8f)
+        val scroller=pager.getChildAt(0) as androidx.recyclerview.widget.RecyclerView
+        assertTrue(scroller.computeHorizontalScrollOffset()>0)
+        assertEquals("home",MainActivity::class.java.getDeclaredField("route").apply { isAccessible=true }.get(activity))
+        assertTrue(pager.endFakeDrag())
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(1)); layout(root)
+        assertSame(home,descendants(root).filterIsInstance<HomePager>().single())
+        assertEquals(1,pager.currentItem)
+        assertEquals("chats",MainActivity::class.java.getDeclaredField("route").apply { isAccessible=true }.get(activity))
+        assertTrue(descendants(activeHome(activity)).any { it.contentDescription=="Open Journal board" })
+        assertFalse(descendants(activeHome(activity)).any { it.contentDescription=="Open Inbox board" })
+    }
+    @Test fun backReturnsThroughNestedSettingsToTheChatThatOpenedThem() {
+        val (activity,root)=fixture("thoughts")
+        val navigate=MainActivity::class.java.getDeclaredMethod("navigate",String::class.java).apply { isAccessible=true }
+        navigate.invoke(activity,"settings"); layout(root)
+        navigate.invoke(activity,"settings:data"); layout(root)
+        navigate.invoke(activity,"categories"); layout(root)
+        val screen=MainActivity::class.java.getDeclaredField("route").apply { isAccessible=true }
+        activity.onBackPressed(); assertEquals("settings:data",screen.get(activity))
+        descendants(root).first { it.contentDescription=="Back" }.performClick(); assertEquals("settings",screen.get(activity))
+        activity.onBackPressed(); assertEquals("thoughts",screen.get(activity))
+    }
+    @Test fun delayedPagerCompletionCannotRestoreNotesOverTheLockScreen() {
+        val (activity,root)=fixture("home")
+        val pager=descendants(root).filterIsInstance<HomePager>().single().pager
+        MainActivity::class.java.getDeclaredField("shown").apply { isAccessible=true }.set(activity,null)
+        root.removeAllViews(); root.addView(TextView(activity).apply { text="Locked" })
+        pager.setCurrentItem(1,false)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(1))
+        assertEquals(listOf("Locked"),descendants(root).filterIsInstance<TextView>().map { it.text.toString() })
+    }
+    @Test fun tableHeadersAddAndRenameColumnsAndTheNormalComposerSendsRows() {
+        val (activity,root)=fixture("thoughts")
+        val state=ChatState(categories.map { if(it.id=="thoughts")it.copy(layout=NotebookLayout("table")) else it },emptyList())
+        field(activity,"shown",state); field(activity,"engine",ChatEngine(state)); call(activity,"render"); layout(root)
+        assertFalse(descendants(root).filterIsInstance<TextView>().any { it.text=="Add row" })
+        fun nameColumn(button:String,name:String) {
+            descendants(root).first { it.contentDescription==button }.performClick()
+            val dialogs=MainActivity::class.java.getDeclaredField("dialogs").apply { isAccessible=true }.get(activity) as List<*>
+            val dialog=dialogs.last() as androidx.appcompat.app.AlertDialog
+            descendants(dialog.window!!.decorView).filterIsInstance<android.widget.EditText>().single().setText(name)
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).performClick()
+            val preview=MainActivity::class.java.getDeclaredField("shown").apply { isAccessible=true }.get(activity) as ChatState
+            val ids=preview.notebook("thoughts").columns.map { it.id }
+            settle(activity); layout(root)
+            val saved=MainActivity::class.java.getDeclaredField("engine").apply { isAccessible=true }.get(activity) as ChatEngine
+            assertEquals(ids,saved.state.notebook("thoughts").columns.map { it.id })
+        }
+        nameColumn("Rename column Note","Item")
+        nameColumn("Add column","Amount")
+        assertTrue(descendants(root).any { it.contentDescription=="Rename column Item" })
+        assertTrue(descendants(root).any { it.contentDescription=="Rename column Amount" })
+        val input=descendants(root).filterIsInstance<android.widget.EditText>().single()
+        input.setText("Rice\nBrown rice")
+        descendants(root).filterIsInstance<RecordButton>().single().performClick(); settle(activity); layout(root)
+        val engine=MainActivity::class.java.getDeclaredField("engine").apply { isAccessible=true }.get(activity) as ChatEngine
+        assertEquals("Rice\nBrown rice",engine.state.messages.single().text)
+        assertEquals("thoughts",engine.state.messages.single().category)
+        assertEquals(listOf("Item","Details","Amount"),engine.state.notebook("thoughts").columns.map { it.title })
+        assertTrue(descendants(root).filterIsInstance<TextView>().any { it.text.contains("Brown rice") })
+        assertEquals("",descendants(root).filterIsInstance<android.widget.EditText>().single().text.toString())
+        capture(root,"table-composer")
     }
     @Test fun guideTravelsAcrossRealScreensAndRestoresItsStepDraftAndCaret() {
         val (activity,root)=fixture()
@@ -810,6 +861,7 @@ class ChatUiTest {
         val engine=MainActivity::class.java.getDeclaredField("engine").apply { isAccessible=true }.get(activity) as ChatEngine
         assertEquals(messages,engine.state.messages)
     }
+    private fun activeHome(activity:MainActivity)=MainActivity::class.java.getDeclaredField("list").apply { isAccessible=true }.get(activity) as androidx.recyclerview.widget.RecyclerView
     private fun layout(root:View) { val density=root.resources.displayMetrics.density; val width=(393*density).toInt(); val height=(830*density).toInt(); root.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY)); root.layout(0,0,width,height) }
     private fun descendants(view:View):List<View> = listOf(view)+(if(view is ViewGroup)(0 until view.childCount).flatMap { descendants(view.getChildAt(it)) } else emptyList())
     private fun field(activity:MainActivity,name:String,value:Any) { MainActivity::class.java.getDeclaredField(name).apply { isAccessible=true }.set(activity,value) }

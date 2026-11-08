@@ -13,7 +13,8 @@ import androidx.recyclerview.widget.RecyclerView
 
 /** One horizontal viewport keeps column headers aligned with virtualized rows. */
 class NotebookTable(context: Context, layout: NotebookLayout, messages: List<Message>, colors: UiColors,
-                    selected: Set<String>, edit: (Message, String) -> Unit, select: (Message) -> Unit) : HorizontalScrollView(context) {
+                    selected: Set<String>, edit: (Message, String) -> Unit, select: (Message) -> Unit,
+                    heading: ((TableColumn) -> Unit)? = null, addColumn: (() -> Unit)? = null) : HorizontalScrollView(context) {
     private class RowHolder(val box:LinearLayout):RecyclerView.ViewHolder(box) { init { box.layoutParams=RecyclerView.LayoutParams(-1,-2) } }
     val recycler=RecyclerView(context).apply { itemAnimator=null }
     init {
@@ -21,7 +22,8 @@ class NotebookTable(context: Context, layout: NotebookLayout, messages: List<Mes
         val density=resources.displayMetrics.density
         fun dp(n:Int)=(n*density).toInt()
         val available=(resources.displayMetrics.widthPixels-dp(24)).coerceAtLeast(dp(260))
-        val columnWidth=(available/layout.columns.size).coerceAtLeast(dp(96))
+        val toolsWidth=if(addColumn==null)0 else dp(48)
+        val columnWidth=((available-toolsWidth)/layout.columns.size).coerceAtLeast(dp(96))
         val content=LinearLayout(context).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(12),0,dp(12),0) }
         fun cell(text:String,heading:Boolean=false)=TextView(context).apply {
             this.text=text.take(TEXT_PREVIEW_CHARS); maxLines=if(heading)3 else 6; ellipsize=android.text.TextUtils.TruncateAt.END; textSize=if(heading)13f else 16f; setTextColor(if(heading)colors.muted else colors.ink)
@@ -30,7 +32,12 @@ class NotebookTable(context: Context, layout: NotebookLayout, messages: List<Mes
             background=android.graphics.drawable.GradientDrawable().apply { setColor(if(heading)colors.inset else colors.surface); setStroke(dp(1).coerceAtLeast(1),colors.divider) }
         }
         content.addView(LinearLayout(context).apply {
-            layout.columns.forEach { addView(cell(it.title,true),LinearLayout.LayoutParams(columnWidth,-1)) }
+            layout.columns.forEach { column -> addView(cell(column.title,true).apply {
+                if(heading!=null) { contentDescription="Rename column ${column.title}"; setOnClickListener { heading(column) } }
+            },LinearLayout.LayoutParams(columnWidth,-1)) }
+            if(addColumn!=null)addView(cell("+",true).apply {
+                contentDescription="Add column"; gravity=Gravity.CENTER; textSize=22f; setOnClickListener { addColumn() }
+            },LinearLayout.LayoutParams(toolsWidth,-1))
         })
         recycler.layoutManager=LinearLayoutManager(context)
         recycler.adapter=object:RecyclerView.Adapter<RowHolder>() {
@@ -52,6 +59,6 @@ class NotebookTable(context: Context, layout: NotebookLayout, messages: List<Mes
             }
         }
         content.addView(recycler,LinearLayout.LayoutParams(-1,0,1f))
-        addView(content,LayoutParams(columnWidth*layout.columns.size+dp(24),-1))
+        addView(content,LayoutParams(columnWidth*layout.columns.size+toolsWidth+dp(24),-1))
     }
 }

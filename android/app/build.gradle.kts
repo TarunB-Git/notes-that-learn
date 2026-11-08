@@ -25,8 +25,8 @@ android {
         applicationId = "dev.notechat"
         minSdk = 30
         targetSdk = 35
-        versionCode = 11
-        versionName = "1.5.3"
+        versionCode = 12
+        versionName = "1.5.4"
         testInstrumentationRunner = "dev.notechat.RuntimeChecks"
         ndk { abiFilters += if (providers.gradleProperty("emulator").orNull == "true") listOf("arm64-v8a", "x86_64") else listOf("arm64-v8a") }
     }
@@ -53,6 +53,13 @@ android {
             initWith(getByName("release"))
             applicationIdSuffix = ".preview"
             versionNameSuffix = "-preview"
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
+        }
+        // Upgrade older locally signed dev.notechat installs without changing their key.
+        // Public GitHub/F-Droid releases continue to use the production signing key.
+        create("localUpdate") {
+            initWith(getByName("release"))
             signingConfig = signingConfigs.getByName("debug")
             matchingFallbacks += "release"
         }
@@ -91,7 +98,8 @@ if (isFdroid) {
 dependencies {
     implementation("com.alphacephei:vosk-android:0.3.75")
     implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.recyclerview:recyclerview:1.2.1")
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
+    implementation("androidx.viewpager2:viewpager2:1.1.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.31.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.exifinterface:exifinterface:1.3.7")

@@ -1,0 +1,1 @@
+Swipe continuously between Notes/categories and Chats. Screens slide forward and back through chats and nested settings. Add table columns with +, tap headings to rename them, and send new rows with the normal message composer. Includes v1.5.3 notebook layouts, background transcription, readable Markdown sync, move forwarding, line breaks and reply privacy.

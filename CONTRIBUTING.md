@@ -27,6 +27,11 @@ Preview output: `app/build/outputs/apk/preview/app-preview.apk` from `android/`.
 **Note Chat Preview** uses `dev.notechat.preview` and a debug key, installing
 beside the production app. It cannot validate a production upgrade.
 
+For an existing `dev.notechat` installation signed with this machine's debug key,
+`:app:assembleLocalUpdate` builds an optimized APK with the same package and key,
+without a Preview suffix. It cannot update production-signed installations and
+must not be published as a release asset.
+
 ## Browser and desktop
 
 From the repository root, with Node.js 22+:
