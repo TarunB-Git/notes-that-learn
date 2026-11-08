@@ -1,6 +1,7 @@
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const output = path.join(root, 'dist');
@@ -32,4 +33,11 @@ for (const [asset, type] of [['icon.svg', 'image/svg+xml'], ['assets/get-it-on-f
   standalone = standalone.replaceAll(`"${asset}"`, `"${data}"`);
 }
 await writeFile(path.join(output, 'note-chat-showcase.html'), standalone);
+// Pages caches assets for ten minutes; changed assets need distinct URLs on reload.
+let hosted = await readFile(path.join(output, 'index.html'), 'utf8');
+for (const [name, content] of [['style.css', css], ['app.mjs', appSource]]) {
+  const version = createHash('sha256').update(content).digest('hex').slice(0, 12);
+  hosted = hosted.replace(`"${name}"`, `"${name}?v=${version}"`);
+}
+await writeFile(path.join(output, 'index.html'), hosted);
 console.log(`Built ${classes.length}-category showcase: ${output}`);
