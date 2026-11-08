@@ -1723,3 +1723,8 @@ dialog a {
 
 .hero-note .hero-arrow-mobile { display:none }
 @media (max-width:760px) { .hero-note .hero-arrow-mobile { display:block } }
+@media (max-width:760px) {
+  .system-flow { display:grid; grid-template-columns:minmax(0,1fr) 12px minmax(0,1fr) 12px minmax(0,1fr) 12px minmax(0,1fr); gap:4px }
+  .flow-node { min-width:0; padding:12px 6px }
+  .flow-connector { width:12px; height:12px }
+}
