@@ -36,6 +36,8 @@ object BackupArchive {
         require(state.categories.size<=32 && state.chats.size<=256 && state.messages.size<=50000)
         require(state.categories.map { it.id }.distinct().size==state.categories.size && state.chats.map { it.id }.distinct().size==state.chats.size)
         require(state.chats.none { chat->state.categories.any { it.id==chat.id } })
+        state.categories.forEach { it.layout.checked() }; state.chats.forEach { it.layout.checked() }
+        require(state.messages.all { it.tableCells.size<=64 && it.tableCells.keys.all { key->key.matches(Regex("[A-Za-z0-9-]{1,64}")) } && it.tableCells.values.sumOf { value->value.length.toLong() }+it.text.length<=MAX_MESSAGE_CHARS })
         require(state.messages.map { it.id }.distinct().size==state.messages.size) { "Backup contains duplicate message IDs" }
         require(state.categories.all { it.id.matches(Regex("[A-Za-z0-9-]{1,64}")) && it.title.isNotBlank() && it.title.length<=60 && it.description.length<=2000 && it.examples.size<=30 && it.examples.all { text -> text.length<=2000 } })
         require(state.chats.all { it.id.matches(Regex("[A-Za-z0-9-]{1,64}")) && it.title.isNotBlank() && it.title.length<=60 })

@@ -41,6 +41,15 @@ App notes and attachments are encrypted locally. **Settings → Storage & backup
 contains encrypted ZIP backup/restore and a Permanent Markdown folder. Markdown
 and shared exports are readable copies outside app-lock protection. Folder
 reconciliation runs after idle time, when leaving the app, or through Sync now.
+Each category or private chat has one Markdown file. Dates and sync markers are
+hidden comments; edit the text or append new paragraphs without changing those
+markers. New and edited category notes are sorted on the next sync and need your
+confirmation before they teach the classifier. Private chats stay private. The
+folder still retains workspace metadata and attachments for recovery.
+
+**Settings → Display → Move forwarded messages** moves a note between chats
+instead of keeping a second copy. Inbox remains an overview of category notes.
+
 Drive can hold a chosen backup; it does not create automatic device sync.
 
 A backup needs its password to restore. App lock cannot unlock a forgotten
@@ -57,3 +66,21 @@ inexact alarms and can be delayed by battery saving.
 [Report a problem](https://github.com/TarunB-Git/note-processing/issues/new?template=bug_report.yml)
 with app/Android versions and a small invented example.
 [Build guide](../CONTRIBUTING.md)
+
+## Lists, tables, and recordings
+
+In a category or private chat, open its menu and choose **Layout**: Notes/chat,
+Checklist, or Table. You can also choose a layout when creating it. Switching
+layouts keeps the notes. Custom checklists keep checked items visible; the built-in
+To-do category continues to archive completed tasks after 24 hours.
+
+Tables have editable column names and cells. Tap a cell to edit a row, use
+**Add row** for a new one, and hold a row for message actions. Small tables fit
+the screen; wider ones scroll sideways with aligned headers. There are no formulas.
+Table cell values and layout settings remain in backups and the Markdown folder.
+
+Tap **Transcribe recording** below an audio message. Transcription stays on the
+phone and can continue while you use another app. Its progress notification has
+a Cancel action. When finished, open **Show transcript** below the recording.
+The saved transcript is reused, including after reopening the app; failures can
+be retried. If Android stops the process before completion, retry from the recording.

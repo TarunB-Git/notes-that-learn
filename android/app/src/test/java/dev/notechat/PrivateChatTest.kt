@@ -10,6 +10,20 @@ import org.robolectric.annotation.Config
 @Config(sdk=[35])
 class PrivateChatTest {
     private val categories=listOf(Category("thoughts","Thoughts","Observations"))
+    @Test fun moveForwardingKeepsOneRecordWithTheSameIdentityAndPersistsThePreference() {
+        val photo=Attachment("media-id","photo.jpg","image/jpeg",12)
+        val note=Message(id="original",text="Keep me",category="thoughts",approved=true,attachment=photo,created=1234,remindAt=9999)
+        val engine=ChatEngine(ChatState(listOf(Category("thoughts","Thoughts","Notes")),listOf(note),
+            chats=listOf(Chat("journal","Journal")),preferences=Preferences(moveForwardedMessages=true)))
+        val moved=engine.forward(setOf(note.id),"chat:journal").single()
+        assertEquals(note.id,moved.id); assertEquals(note.created,moved.created); assertEquals(photo,moved.attachment)
+        assertEquals(1,engine.state.messages.size); assertEquals("journal",moved.chatId)
+        assertNull(moved.category); assertNull(moved.remindAt); assertFalse(moved.approved)
+        assertTrue(StateJson.decode(StateJson.encode(engine.state)).preferences.moveForwardedMessages)
+        engine.forward(setOf(moved.id),"thoughts")
+        assertEquals(1,engine.state.messages.size); assertNull(engine.state.messages.single().chatId)
+        assertEquals("thoughts",engine.state.messages.single().category)
+    }
     @Test fun oldWorkspacesKeepPrivateMessagesSeparateAndOptInSurvivesRestore() {
         val private=Message(text="Journal entry",chatId="journal")
         val note=Message(text="Inbox note")

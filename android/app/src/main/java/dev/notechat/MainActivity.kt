@@ -52,6 +52,19 @@ import javax.crypto.Cipher
 class MainActivity : Activity(), UiColorSource {
     private val worker = Executors.newSingleThreadExecutor()
     private val modWorker = Executors.newSingleThreadExecutor()
+    private val expandedTranscripts=mutableSetOf<String>()
+    private val transcriptionReceiver=object:android.content.BroadcastReceiver() {
+        override fun onReceive(context:Context?,intent:Intent?) {
+            if(!resumed || shown==null)return
+            worker.execute {
+                if(!vault.isOpen)return@execute
+                runCatching { consumeTranscripts() }
+                val state=engine?.state ?: return@execute
+                runOnUiThread { if(resumed && shown!=null) { shown=projectPending(state); render() } }
+            }
+        }
+    }
+    private var transcriptionReceiverRegistered=false
     private lateinit var vault: Vault
     private var engine: ChatEngine? = null
     private var encoder: MiniLm? = null
@@ -251,6 +264,8 @@ class MainActivity : Activity(), UiColorSource {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        androidx.core.content.ContextCompat.registerReceiver(this,transcriptionReceiver,android.content.IntentFilter(TranscriptionService.CHANGED),androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+        transcriptionReceiverRegistered=true
         vault = Vault(this)
         appearanceHint=getSharedPreferences("display",MODE_PRIVATE).getString("appearance","system") ?: "system"
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
@@ -266,6 +281,7 @@ class MainActivity : Activity(), UiColorSource {
         noisyRegistered=true
         savedInstanceState?.let { pendingCategoryPhoto=it.getString("categoryPhoto"); restoredNavigation=Navigation(it.getString("screen","home"),it.getString("anchor"),it.getInt("index"),it.getInt("offset"),it.getInt("scroll")) }
         captureIntent(intent)
+        if(!TranscriptionService.active())cacheDir.listFiles()?.filter { it.name.startsWith("transcribe-audio-") }?.forEach { it.delete() }
         cacheDir.listFiles()?.filter { file -> listOf("record-","play-","restore-","import-","ocr-").any { file.name.startsWith(it) } }?.forEach { it.deleteRecursively() }
         File(cacheDir,"shared").listFiles()?.filter { System.currentTimeMillis()-it.lastModified()>10*60*1000 }?.forEach { it.delete() }
         if (vault.lockedStorage) lockedScreen() else loadWorkspace()
@@ -295,7 +311,7 @@ class MainActivity : Activity(), UiColorSource {
         if(vault.lockedStorage && shown==null && !authInProgress) { lockedScreen(); if(!autoUnlockAttempted) { autoUnlockAttempted=true; unlockWorkspace() } }
         else if(shown!=null && !vault.lockedStorage) {
             val generation=sessionGeneration
-            worker.execute { configure(); val state=engine?.state; state?.let(::publishWidget); TodoWidget.refresh(this); runOnUiThread {
+            worker.execute { runCatching { consumeTranscripts() }; configure(); val state=engine?.state; state?.let(::publishWidget); TodoWidget.refresh(this); runOnUiThread {
                 if(state!=null && resumed && generation==sessionGeneration) {
                     draft=editor?.text?.toString() ?: draft; shown=projectPending(state); render(); processPending()
                 }
@@ -343,6 +359,7 @@ class MainActivity : Activity(), UiColorSource {
         }
     }
     override fun onDestroy() {
+        if(transcriptionReceiverRegistered) { unregisterReceiver(transcriptionReceiver); transcriptionReceiverRegistered=false }
         super.onDestroy(); if(noisyRegistered) { unregisterReceiver(noisyReceiver); noisyRegistered=false }; handler.removeCallbacksAndMessages(null); stopPlayback(); if(recorder!=null) stopRecording(false)
         worker.execute { vault.close(); encoder?.close(); encoder=null }; worker.shutdown(); modWorker.shutdown()
     }
@@ -353,7 +370,7 @@ class MainActivity : Activity(), UiColorSource {
                 if (!vault.isOpen) vault.openWithoutLock()
                 val restored = ChatEngine(vault.load())
                 val expired=restored.expire()
-                restored.state=restored.state.copy(messages=restored.state.messages.map { if(it.done && it.completedAt==null)it.copy(completedAt=System.currentTimeMillis()) else it })
+                restored.state=restored.state.copy(messages=restored.state.messages.map { if(it.done && it.completedAt==null && it.chatId==null && it.category=="todos")it.copy(completedAt=System.currentTimeMillis()) else it })
                 engine=restored
                 vault.save(restored.state)
                 publishWidget(restored.state)
@@ -365,6 +382,7 @@ class MainActivity : Activity(), UiColorSource {
                 encoder=try { if(restored.state.preferences.classification && MiniLm.modelFile(this).exists()) MiniLm(this) else null } catch(error:Exception) { modelFailure=error.message; null }
                 classifier=TextClassifier(encoder,Diagnostics::record)
                 configure()
+                consumeTranscripts()
                 markdownDirty=restored.state.markdown.tree!=null
                 val state=restored.state
                 runOnUiThread { if (!isFinishing && (!vault.lockedStorage || resumed)) { shown=projectPending(state); busy=false; restoreSession(state); privacy(); render(); processPending(); if(markdownDirty)scheduleIdleSave() } }
@@ -705,6 +723,7 @@ class MainActivity : Activity(), UiColorSource {
             contentDescription="Chat name"
         }
         field.addView(name); content.addView(field,LinearLayout.LayoutParams(-1,-2))
+        val layoutChoice=layoutPicker(content,chat?.layout ?: NotebookLayout())
         val buttons=row().apply { gravity=Gravity.END; setPadding(0,dp(12),0,0) }
         buttons.addView(action("Cancel",{ sheet.dismiss() },false))
         val submit=action(if(chat==null)"Create chat" else "Save",{
@@ -712,7 +731,7 @@ class MainActivity : Activity(), UiColorSource {
             if(title.isBlank())field.error="Enter a chat name"
             else if(shown?.chats?.any { it.id!=chat?.id && it.title.equals(title,true) }==true)field.error="That chat name is already used"
             else {
-                val changed=chat?.copy(title=title) ?: Chat(UUID.randomUUID().toString(),title)
+                val changed=chat?.copy(title=title,layout=chosenLayout(layoutChoice,chat.layout)) ?: Chat(UUID.randomUUID().toString(),title,layout=chosenLayout(layoutChoice,NotebookLayout()))
                 work("",onSuccess={ sheet.dismiss(); if(chat==null)navigate("chat:${changed.id}") }) {
                     if(chat==null)engine!!.addChat(changed)
                     else engine!!.state=engine!!.state.copy(chats=engine!!.state.chats.map { if(it.id==chat.id)changed else it })
@@ -728,13 +747,14 @@ class MainActivity : Activity(), UiColorSource {
         name.requestFocus(); name.post { (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(name,InputMethodManager.SHOW_IMPLICIT) }
     }
     private fun privateChatMenu(chat: Chat) {
-        menu(chat.title,listOf("Rename","Make a category","Change icon","Add to home screen","Forward chat","Delete chat messages")) { choice -> when(choice) {
+        menu(chat.title,listOf("Rename","Make a category","Change icon","Add to home screen","Forward chat","Delete chat messages","Layout")) { choice -> when(choice) {
             0->chatNameSheet(chat)
             1->{ val description=EditText(this).apply { hint="What belongs in this category?" }; dialog("Make ${chat.title} a category?").setMessage("Existing messages become confirmed examples. Use a unique category name.").setView(description)
                 .setNegativeButton("Cancel",null).setPositiveButton("Add to categories") { _,_->work("Category created",onSuccess={ navigate(chat.id) }) { engine!!.promoteChat(chat.id,description.text.toString().trim()); configure(); maybeTrain() } }.showTracked() }
             2->categoryIconMenu(Category(chat.id,chat.title,"",icon=chat.icon,photo=chat.photo))
             3->pinShortcut("chat:${chat.id}",chat.title,chat.icon,chat.photo)
             4->forwardMessages(shown!!.messages.filter { it.visible() && it.chatId==chat.id })
+            6->notebookSettings("chat:${chat.id}")
             5->dialog("Delete this chat?").setMessage("Its messages go to Recently deleted. The chat remains available for recovered messages.").setNegativeButton("Cancel",null).setPositiveButton("Delete messages") { _,_->confirmDelete(shown!!.messages.filter { it.chatId==chat.id && it.visible() }.map { it.id }.toSet()) }.showTracked()
         } }
     }
@@ -962,7 +982,7 @@ class MainActivity : Activity(), UiColorSource {
         if(renderedRoute.isNotBlank() && (list!=null || root.childCount>0))positions[renderedRoute]=capturePosition()
         val changed=route!=renderedRoute
         if(!changed && editor!=null && pendingCaret==null)pendingCaret=cursor
-        val backwards=route in setOf("home","settings")
+        root.animate().cancel(); root.alpha=1f; root.translationX=0f
         root.removeAllViews(); editor=null; list=null; viewport=null; overflowAnchor=null; headerView=null
         splitLines=null; composerContent=null; recordButton=null; recordingClock=null; recordingWave=null; modelStatus=null; voiceViews.clear()
         when(route) {
@@ -981,15 +1001,18 @@ class MainActivity : Activity(), UiColorSource {
         guidePanel()
         restorePosition(state)
         if(!changed && keepFocus && selected.isEmpty() && !searchMode)editor?.let { it.requestFocus(); it.setSelection(cursor.coerceIn(0,it.length())) }
-        if(changed && renderedRoute.isNotEmpty() && android.animation.ValueAnimator.areAnimatorsEnabled())for(i in 0 until root.childCount)root.getChildAt(i).apply {
-            alpha=0f; translationX=dp(if(backwards)-20 else 28).toFloat()
-            animate().alpha(1f).translationX(0f).setDuration(190).setInterpolator(DecelerateInterpolator()).start()
+        if(changed && !themeChanged && renderedRoute.isNotEmpty() && android.animation.ValueAnimator.areAnimatorsEnabled()) {
+            // Keep navigation chrome still; a brief content fade avoids whole-screen sliding.
+            for(i in 0 until root.childCount)root.getChildAt(i).takeUnless { it===headerView }?.apply {
+                alpha=.82f
+                animate().alpha(1f).setDuration(120).setInterpolator(android.view.animation.PathInterpolator(.4f,0f,.2f,1f)).start()
+            }
         }
         if(themeChanged && android.animation.ValueAnimator.areAnimatorsEnabled()) {
             // Fade the new palette in over its previous surface; respect Android's animation setting.
             window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(oldColors!!.surface))
             root.alpha=0f
-            root.animate().alpha(1f).setDuration(180).withEndAction { window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(colors.surface)) }.start()
+            root.animate().alpha(1f).setDuration(140).withEndAction { window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(colors.surface)) }.start()
         }
         renderedRoute=route
     }
@@ -1029,7 +1052,7 @@ class MainActivity : Activity(), UiColorSource {
                 addAll(state.categories.sortedByDescending { it.pinned }.map { c->Triple(c.id,c.title,active.filter { it.chatId==null && it.category==c.id }) })
                 add(Triple("unsorted","Unsorted",active.filter { it.chatId==null && !it.approved }))
             }
-        fun filtered()=if(query.isBlank())rows else rows.filter { it.second.contains(query,true) }+active.filter { m->(if(privateTab)m.chatId!=null else m.inInbox(state.preferences)) && (m.text.contains(query,true) || m.attachment?.name?.contains(query,true)==true) }.map { m->Triple("message:${m.id}",state.chats.firstOrNull { it.id==m.chatId }?.title ?: state.categories.firstOrNull { it.id==m.category }?.title ?: "Inbox",listOf(m)) }
+        fun filtered()=if(query.isBlank())rows else rows.filter { it.second.contains(query,true) }+active.filter { m->(if(privateTab)m.chatId!=null else m.inInbox(state.preferences)) && (m.searchText().contains(query,true) || m.attachment?.name?.contains(query,true)==true) }.map { m->Triple("message:${m.id}",state.chats.firstOrNull { it.id==m.chatId }?.title ?: state.categories.firstOrNull { it.id==m.category }?.title ?: "Inbox",listOf(m)) }
         val recycler=recycler()
         recycler.adapter=object:RecyclerView.Adapter<RowHolder>() {
             override fun getItemCount()=filtered().size
@@ -1084,10 +1107,89 @@ class MainActivity : Activity(), UiColorSource {
     private fun homeMenu() { overflow(listOf("New private chat","Import TXT / Markdown / ZIP","Reclassify all","Starred notes","Manage categories","Settings")) { when(it) { 0->newChat(); 1->pickText(); 2->reclassifyAll(); 3->navigate("starred"); 4->navigate("categories"); 5->navigate("settings") } } }
     private fun messages(state:ChatState,includeSearch:Boolean=true)=state.messages.filter { it.visible() && when(route) {
         "all" -> it.inInbox(state.preferences); "starred" -> it.starred && !it.starArchived(); "unsorted" -> it.chatId==null && !it.approved; else -> if(route.startsWith("chat:"))it.chatId==route.removePrefix("chat:") else it.chatId==null && it.category==route
-    } }.filter { !includeSearch || query.isBlank() || it.text.contains(query,true) || it.attachment?.name?.contains(query,true)==true }
+    } }.filter { !includeSearch || query.isBlank() || it.searchText().contains(query,true) || it.attachment?.name?.contains(query,true)==true }
     private fun title(state:ChatState)=when(route) { "all"->"Inbox"; "starred"->"Starred"; "unsorted"->"Unsorted"; else->state.chats.firstOrNull { "chat:${it.id}"==route }?.title ?: state.categories.firstOrNull { it.id==route }?.title ?: "Inbox" }
+    private fun layoutPicker(parent:LinearLayout,layout:NotebookLayout):Spinner {
+        parent.addView(label("Layout",13,muted).apply { setPadding(0,dp(14),0,dp(4)) })
+        return Spinner(this).apply {
+            contentDescription="Notebook layout"
+            adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,listOf("Notes / chat","Checklist","Table"))
+            setSelection(when(layout.mode) { "list"->1; "table"->2; else->0 })
+            parent.addView(this,LinearLayout.LayoutParams(-1,dp(48)))
+        }
+    }
+    private fun chosenLayout(spinner:Spinner,current:NotebookLayout)=current.copy(mode=listOf("notes","list","table")[spinner.selectedItemPosition]).checked()
+    private fun notebookSettings(target:String=route) {
+        val current=shown!!.notebook(target)
+        menu("Notebook layout",listOf("Notes / chat","Checklist","Table","Edit table columns")) { index ->
+            if(index==3)editTableColumns(target)
+            else work("Layout changed · notes kept") { engine!!.setNotebook(target,current.copy(mode=listOf("notes","list","table")[index])) }
+        }
+    }
+    private fun editTableColumns(target:String) {
+        val current=shown!!.notebook(target)
+        val field=EditText(this).apply { setText(current.columns.joinToString("\n") { it.title }); minLines=3; maxLines=12; hint="One column name per line" }
+        val prompt=dialog("Table columns").setMessage("Up to 12 columns. The first column holds the note. Clear a populated column before removing it; renaming keeps its values.").setView(field).setNegativeButton("Cancel",null).setPositiveButton("Save",null).showTracked()
+        prompt.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val updated=try { current.copy(mode="table").withTitles(field.text.toString().lines().filter(String::isNotBlank)) } catch(_:IllegalArgumentException) { field.error="Use 1–12 nonempty names, up to 60 characters each"; return@setOnClickListener }
+            val removed=current.columns.map { it.id }.toSet()-updated.columns.map { it.id }.toSet()
+            val values=shown!!.messages.filter { if(target.startsWith("chat:"))it.chatId==target.removePrefix("chat:") else it.chatId==null && it.category==target }
+            if(values.any { row->removed.any { row.tableCells[it]?.isNotBlank()==true } }) { field.error="Clear populated columns before removing them"; return@setOnClickListener }
+            prompt.dismiss(); work("") { engine!!.setNotebook(target,updated) }
+        }
+    }
+    private fun tableConversation(state:ChatState) {
+        val current=messages(state)
+        selected.retainAll(current.map { it.id }.toSet())
+        if(selected.isNotEmpty())selectionToolbar(state)
+        else toolbar(title(state),"Tap a cell to edit",{ navigate(homeTab) },listOf("add" to { editTableRow(null) },"more" to { chatMenu() }))
+        val table=NotebookTable(this,state.notebook(route),current,colors,selected,{ message,column->editTableRow(message,column) },{ toggleSelection(it.id) })
+        list=table.recycler; root.addView(table,LinearLayout.LayoutParams(-1,0,1f))
+        root.addView(action("Add row",{ editTableRow(null) },false))
+    }
+    private fun editTableRow(message:Message?,focus:String="note") {
+        val layout=shown!!.notebook(route)
+        val content=column().apply { setPadding(dp(16),0,dp(16),0) }
+        val fields=layout.columns.associate { column ->
+            content.addView(label(column.title,13,muted))
+            column.id to EditText(this).apply {
+                setText(if(column.id=="note")message?.text.orEmpty() else message?.tableCells?.get(column.id).orEmpty())
+                contentDescription=column.title; maxLines=5; minLines=1; setTextColor(ink)
+                inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                content.addView(this,LinearLayout.LayoutParams(-1,-2))
+            }
+        }
+        message?.attachment?.let { content.addView(action("Open attachment",{ openAttachment(message) },false)) }
+        val scroll=ScrollView(this).apply { addView(content) }
+        val prompt=dialog(if(message==null)"Add row" else "Edit row").setView(scroll).setNegativeButton("Cancel",null).setPositiveButton("Save",null).showTracked()
+        prompt.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val text=fields.getValue("note").text.toString().trim()
+            val values=message?.tableCells.orEmpty()+fields.filterKeys { it!="note" }.mapValues { it.value.text.toString().trim() }
+            if(text.isBlank() && message?.attachment==null) { fields.getValue("note").error="Enter a note in the first column"; return@setOnClickListener }
+            if(text.length+values.values.sumOf { it.length }>MAX_MESSAGE_CHARS) { fields.getValue("note").error="Row is too long"; return@setOnClickListener }
+            prompt.dismiss()
+            work("") {
+                val engine=engine!!
+                if(message==null) {
+                    val chat=route.removePrefix("chat:").takeIf { route.startsWith("chat:") }
+                    engine.state=engine.state.copy(messages=engine.state.messages+Message(text=text,tableCells=values,chatId=chat,category=route.takeIf { chat==null },manual=true,approved=chat==null,reason="Added to this table by you."))
+                } else {
+                    if(message.text!=text) {
+                        if(text.isNotBlank())engine.edit(message.id,text,keepCategory=true)
+                        else engine.update(message.id) { it.copy(text="",approved=false,edited=true) }
+                    }
+                    engine.update(message.id) { it.copy(tableCells=values) }
+                }
+            }
+        }
+        fields[focus]?.requestFocus()
+    }
     private fun conversation(state:ChatState) {
-        if(route=="todos" && !searchMode && !(state.preferences.frontend=="notes" && editTarget!=null)) { todoList(state); return }
+        if(!searchMode && editTarget==null) {
+            val layout=state.notebook(route)
+            if(layout.mode=="table") { tableConversation(state); return }
+            if(layout.mode=="list" || (route=="todos" && layout.mode=="default")) { todoList(state); return }
+        }
         val current=messages(state,false)
         selected.retainAll(current.map { it.id }.toSet())
         if(selected.isNotEmpty()) selectionToolbar(state)
@@ -1129,7 +1231,7 @@ class MainActivity : Activity(), UiColorSource {
             if(!recovering) { setOnClickListener { if(selected.isNotEmpty())toggleSelection(message.id) }; setOnLongClickListener { toggleSelection(message.id); true } }
         }
         val body=BubbleLayout(this@MainActivity,width).apply { orientation=LinearLayout.VERTICAL; background=if(notes)null else rounded(bubble,10); setPadding(dp(if(notes)4 else 9),dp(6),dp(if(notes)4 else 9),dp(4)); minimumWidth=dp(150) }
-        val quote=message.replyTo?.let { id->state.messages.firstOrNull { it.id==id && it.deleted==null } }
+        val quote=message.replyTo?.let { id->state.messages.firstOrNull { it.id==id && it.deleted==null && it.chatId==message.chatId } }
         if(message.replyTo!=null)body.addView(replyPreview(quote).apply {
             if(!recovering)setOnClickListener { if(selected.isNotEmpty())toggleSelection(message.id) else quote?.let { jumpTo(it.id,true) } }
             if(!recovering)setOnLongClickListener { toggleSelection(message.id); true }
@@ -1146,6 +1248,9 @@ class MainActivity : Activity(), UiColorSource {
             }
             else->{ val media=row(); media.addView(icon("attach","Open ${a.name}") { if(selected.isNotEmpty())toggleSelection(message.id) else openAttachment(message) }); media.addView(label(a.name,15,ink).apply { maxLines=2 },LinearLayout.LayoutParams(0,-2,1f)); body.addView(media,LinearLayout.LayoutParams(width-dp(18),-2)) }
         } }
+        val audio=message.attachment?.mime?.startsWith("audio/")==true
+        if(audio && message.transcribed && editTarget!=message.id)body.addView(transcriptView(message))
+        else if(audio && !recovering)body.addView(transcriptionAction(message))
         if(notes && editTarget==message.id)body.addView(label("Autosave on · tap ✓ when finished",12,muted))
         if(notes && editTarget==message.id)body.addView(EditText(this).apply {
             textSize=18f; setTextColor(ink); background=null; setText(draft); pendingCaret?.let { caret->setSelection(caret.coerceIn(0,length())); pendingCaret=null }; minLines=3
@@ -1153,7 +1258,7 @@ class MainActivity : Activity(), UiColorSource {
             setPadding(0,dp(8),0,dp(8)); setTag(R.id.guide_target,"composer")
             addTextChangedListener(watcher { draft=it; scheduleNoteAutosave() }); editor=this; scheduleNoteAutosave()
         },LinearLayout.LayoutParams(-1,-2))
-        else if(message.text.isNotBlank())body.addView(MessageText(this@MainActivity) { if(!recovering)tagging(message) }.apply {
+        else if(message.text.isNotBlank() && !(audio && message.transcribed))body.addView(MessageText(this@MainActivity) { if(!recovering)tagging(message) }.apply {
             textSize=if(notes)18f else 16f; setTextColor(ink); immediateTap=notes || selected.isNotEmpty(); setPadding(0,dp(3),0,dp(5)); maxWidth=width-dp(18)
             interceptTap={ if(selected.isNotEmpty()) { toggleSelection(message.id); true } else false }
             linkMenu=::linkActions
@@ -1161,6 +1266,10 @@ class MainActivity : Activity(), UiColorSource {
             setOnClickListener { if(selected.isNotEmpty())toggleSelection(message.id) else if(notes)editMessage(message) }
             if(!recovering)setOnLongClickListener { toggleSelection(message.id); true }
         })
+        message.tableCells.filterValues(String::isNotBlank).forEach { (id,value) ->
+            val name=state.notebook(message.chatId?.let { "chat:$it" } ?: message.category.orEmpty()).columns.firstOrNull { it.id==id }?.title ?: "Saved field"
+            body.addView(label("$name: ${value.take(TEXT_PREVIEW_CHARS)}",14,muted))
+        }
         if(message.text.length>TEXT_PREVIEW_CHARS)body.addView(action("Read full note",{ if(selected.isNotEmpty())toggleSelection(message.id) else readLongNote(message) },false))
         message.translation?.takeIf { it!=message.text }?.let { translated ->
             body.addView(label("Translation\n${translated.take(TEXT_PREVIEW_CHARS)}",14,muted).apply { setPadding(0,dp(6),0,dp(6)) })
@@ -1335,7 +1444,7 @@ class MainActivity : Activity(), UiColorSource {
             options[if((message.pinnedUntil ?: 0)>System.currentTimeMillis())"Unpin message" else "Pin message"]={ clearSelection(); if((message.pinnedUntil ?: 0)>System.currentTimeMillis())work("") { engine!!.pin(message.id,null) } else pinMessage(message) }
             options["Edit"]={ clearSelection(); editMessage(message) }
             if(message.attachment==null)options["Split message"]={ startSplit(message) }
-            if(message.attachment?.mime?.startsWith("audio/")==true)options["Transcribe voice message"]={ clearSelection(); transcribe(message) }
+            if(message.attachment?.mime?.startsWith("audio/")==true)options[if(message.transcribed)"Show saved transcript" else "Transcribe voice message"]={ clearSelection(); transcribe(message) }
             if(Mods.available && message.attachment?.mime?.startsWith("image/")==true)options["Extract text (OCR)"]={ clearSelection(); extractText(message) }
             if(Mods.available && message.text.isNotBlank())options["Translate"]={ clearSelection(); translateMessage(message) }
             options["Set reminder"]={ clearSelection(); setReminder(message) }
@@ -1424,6 +1533,7 @@ class MainActivity : Activity(), UiColorSource {
         options["Select messages"]={ messages(shown!!,false).lastOrNull()?.let { toggleSelection(it.id) } }
         options["Export chat"]={ exportMenu() }; options["Forward chat"]={ forwardMessages(messages(shown!!,false)) }
         options["Go to first message"]={ messages(shown!!,false).firstOrNull()?.let { jumpTo(it.id) } }
+        if(shown!!.categories.any { it.id==route } || route.startsWith("chat:"))options["Layout"]={ notebookSettings(route) }
         options["Pinned messages"]={ showPins() }
         options["Add to home screen"]={ val state=shown!!; pinShortcut(route,title(state),state.categories.firstOrNull { it.id==route }?.icon,state.categories.firstOrNull { it.id==route }?.photo) }
         if(route.startsWith("chat:"))options["Chat settings"]={ shown!!.chats.firstOrNull { "chat:${it.id}"==route }?.let(::privateChatMenu) }
@@ -1443,7 +1553,7 @@ class MainActivity : Activity(), UiColorSource {
         input.setOnEditorActionListener { _,_,_->(getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(input.windowToken,0); true }
         input.requestFocus(); input.post { if(resumed && searchMode)(getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(input,InputMethodManager.SHOW_IMPLICIT) }
     }
-    private fun matching(current:List<Message>)=if(query.isBlank())emptyList() else current.indices.filter { current[it].text.contains(query,true) || current[it].attachment?.name?.contains(query,true)==true }
+    private fun matching(current:List<Message>)=if(query.isBlank())emptyList() else current.indices.filter { current[it].searchText().contains(query,true) || current[it].attachment?.name?.contains(query,true)==true }
     private fun searchNavigation(current:List<Message>) {
         searchMatches=matching(current); if(searchCursor !in searchMatches.indices)searchCursor=searchMatches.lastIndex
         val bar=row().apply { setBackgroundColor(colors.surface); setPadding(dp(16),0,dp(4),0) }
@@ -1498,11 +1608,12 @@ class MainActivity : Activity(), UiColorSource {
                     catch(error:Exception) { tell(error.message ?: "Could not update the launcher icon") }
                 }
                 toggleSetting(content,"Include private chats in Inbox","Show private messages alongside notes",state.preferences.includePrivateChatsInInbox) { enabled->work("") { engine!!.state=engine!!.state.copy(preferences=engine!!.state.preferences.copy(includePrivateChatsInInbox=enabled)) } }
+                toggleSetting(content,"Move forwarded messages","Forwarding between chats moves the note instead of keeping a copy. Inbox still shows notes from all categories.",state.preferences.moveForwardedMessages) { enabled->work("") { engine!!.state=engine!!.state.copy(preferences=engine!!.state.preferences.copy(moveForwardedMessages=enabled)) } }
                 setting(content,"To-do widget","Add a checklist to your Android home screen") { requestTodoWidget() }
             }
             "settings:data"->{
                 setting(content,"Permanent Markdown folder",markdownError ?: if(state.markdown.tree==null)"Choose a folder. Files survive uninstall until you delete the folder." else "Connected · saves after 30 seconds idle or when you leave. Files survive uninstall.") { markdownSettings() }
-                content.addView(label("Markdown saves run in the background after 30 seconds without activity and when you leave the app. Sync now is available in the folder menu. Folder copies are readable. Category contents follow edits; app deletion still uses 90-day recovery. The saved workspace and attachments remain outside the app until you remove them.",13,muted).apply { setPadding(dp(4),dp(8),dp(4),dp(12)) })
+                content.addView(label("Markdown saves run in the background after 30 seconds without activity and when you leave the app. Sync now is available in the folder menu. Folder copies are readable. Edit the note text or append paragraphs in a category or chat file. New and edited category notes are sorted when you return; private chats stay private. Confirm categories in the app to teach it. App deletion still uses 90-day recovery. The saved workspace and attachments remain outside the app until you remove them.",13,muted).apply { setPadding(dp(4),dp(8),dp(4),dp(12)) })
                 setting(content,"Create encrypted backup","ZIP · messages, media, private chats, approvals, and personal head. Save to device or Drive.") { createBackup() }
                 setting(content,"Import / restore ZIP","Open a backup from device or Drive, or a WhatsApp export. Duplicate message IDs are detected.") { pickText() }
                 setting(content,"Import TXT / Markdown","Preview messages before importing") { pickText() }
@@ -1764,18 +1875,19 @@ class MainActivity : Activity(), UiColorSource {
         state.categories.forEach { c -> setting(content,c.title + if(c.pinned)" · pinned" else "",c.description) { categoryMenu(c) } }
         content.addView(action("Add category",{ editCategory(null) }))
     }
-    private fun categoryMenu(c:Category) { menu(c.title,listOf("Edit category",if(c.pinned)"Unpin chat" else "Pin chat","Remove category","Export category","Change chat icon","Add to home screen")) { i -> when(i) {
+    private fun categoryMenu(c:Category) { menu(c.title,listOf("Edit category",if(c.pinned)"Unpin chat" else "Pin chat","Remove category","Export category","Change chat icon","Add to home screen","Layout")) { i -> when(i) {
         0->editCategory(c); 1->work { engine!!.state=engine!!.state.copy(categories=engine!!.state.categories.map { if(it.id==c.id)it.copy(pinned=!it.pinned) else it }) }
         2->{ val others=shown!!.categories.filterNot { it.id==c.id }; menu("Move its messages before removing",listOf("Unsorted")+others.map { it.title }) { target ->work("Category removed · messages kept") { engine!!.removeCategory(c.id,if(target==0)null else others[target-1].id); configure(); runOnUiThread { if(route==c.id)route="home" } } } }
-        3->{ navigate(c.id); exportMenu() }; 4->categoryIconMenu(c); 5->pinShortcut(c.id,c.title,c.icon,c.photo)
+        3->{ navigate(c.id); exportMenu() }; 4->categoryIconMenu(c); 5->pinShortcut(c.id,c.title,c.icon,c.photo); 6->notebookSettings(c.id)
     } } }
     private fun editCategory(c:Category?) {
         val box=column().apply { setPadding(dp(20),dp(4),dp(20),0) }
         val title=EditText(this).apply { hint="Name"; setText(c?.title.orEmpty()) }; val description=EditText(this).apply { hint="What belongs here?"; setText(c?.description.orEmpty()); maxLines=5 }
         val examples=EditText(this).apply { hint="Example messages (one per line)"; setText(c?.examples?.joinToString("\n").orEmpty()); maxLines=5 }
         box.addView(title); box.addView(description); box.addView(examples)
+        val layoutChoice=layoutPicker(box,c?.layout?.let { if(c.id=="todos" && it.mode=="default")it.copy(mode="list") else it } ?: NotebookLayout())
         dialog(if(c==null)"Add category" else "Edit category").setView(box).setNegativeButton("Cancel",null).setPositiveButton("Save") { _,_->
-            val category=Category(c?.id ?: UUID.randomUUID().toString(),title.text.toString().trim(),description.text.toString().trim(),examples.text.toString().lines().map { it.trim() }.filter { it.isNotBlank() }.take(30),c?.pinned ?: false,c?.icon,c?.photo)
+            val category=Category(c?.id ?: UUID.randomUUID().toString(),title.text.toString().trim(),description.text.toString().trim(),examples.text.toString().lines().map { it.trim() }.filter { it.isNotBlank() }.take(30),c?.pinned ?: false,c?.icon,c?.photo,chosenLayout(layoutChoice,c?.layout ?: NotebookLayout()))
             work { if(c==null)engine!!.addCategory(category) else {
                 require(category.title.isNotBlank() && category.title.length<=60 && category.description.isNotBlank() && category.description.length<=2000 && category.examples.all { it.length<=2000 })
                 require(engine!!.state.categories.none { it.id!=category.id && it.title.equals(category.title,true) }) { "That category name is already used" }
@@ -1974,7 +2086,7 @@ class MainActivity : Activity(), UiColorSource {
         if(vault.lockedStorage)dialog.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
     }
     private fun suggest(message: Message) {
-        val suggestion=classifier.classify(message)
+        val suggestion=predict(message)
         engine!!.update(message.id) { it.copy(category=suggestion.category,reason=suggestion.reason) }
     }
     private fun startSplit(message: Message) {
@@ -2046,7 +2158,7 @@ class MainActivity : Activity(), UiColorSource {
     private fun todoList(state: ChatState) {
         val current=messages(state,false)
         selected.retainAll(current.map { it.id }.toSet())
-        if(selected.isNotEmpty())selectionToolbar(state) else toolbar("To-do","",{ navigate(homeTab) },listOf("search" to { beginSearch() },"more" to { chatMenu() }))
+        if(selected.isNotEmpty())selectionToolbar(state) else toolbar(title(state),"",{ navigate(homeTab) },listOf("search" to { beginSearch() },"more" to { chatMenu() }))
         pinnedBar(current)
         val recycler=recycler()
         recycler.adapter=MessageRows(this,current) { box,m,_ ->
@@ -2056,11 +2168,17 @@ class MainActivity : Activity(), UiColorSource {
             line.footer.addView(label(time(m.created),11,muted).apply { setOnClickListener { tagging(m) } },LinearLayout.LayoutParams(0,-2,1f))
             line.footer.addView(action("Tag",{ if(selected.isEmpty())tagging(m) else toggleSelection(m.id) },false))
             if(m.text.length>TEXT_PREVIEW_CHARS)line.footer.addView(action("Read full note",{ if(selected.isEmpty())readLongNote(m) else toggleSelection(m.id) },false))
-            if(m.trainable()) {
+            if(m.trainable() && m.chatId==null) {
                 line.footer.addView(action(if(m.approved)"👍 ✓" else "👍",{ approveMessages(setOf(m.id)) },false).apply { visibility=if(selected.isEmpty())View.VISIBLE else View.INVISIBLE })
                 line.footer.addView(action("👎",{ disapprove(m) },false).apply { visibility=if(selected.isEmpty())View.VISIBLE else View.INVISIBLE })
             }
             box.addView(line); box.tag=m.id
+            if(m.attachment?.mime?.startsWith("audio/")==true) {
+                val voice=VoiceMessageView(this@MainActivity,m.attachment.waveform,{ playVoice(m) },{ seekVoice(m,it) },{ changeSpeed() })
+                voiceViews[m.id]=voice; updateVoice(m.id,voice)
+                box.addView(voice,LinearLayout.LayoutParams(-1,-2))
+                box.addView(if(m.transcribed)transcriptView(m) else transcriptionAction(m))
+            }
             box.addView(View(this).apply { setBackgroundColor(colors.divider) },LinearLayout.LayoutParams(-1,dp(1)))
         }
         list=recycler; viewport=ChatViewport(this,recycler,current.map { it.id },colors); root.addView(viewport,LinearLayout.LayoutParams(-1,0,1f))
@@ -2117,27 +2235,79 @@ class MainActivity : Activity(), UiColorSource {
         else tell("Long-press the Android home screen, choose Widgets, then Note Chat To-do.")
     }
     private fun speechSettings() {
+        if(TranscriptionService.active()) { toast("Finish or cancel transcription before changing the speech model"); return }
         if(VoiceTranscriber.installed(this))menu("Offline speech · English",listOf("Remove downloaded speech model")) { work("") { VoiceTranscriber.remove(this) } }
         else dialog("Download offline speech model?").setMessage("Vosk English: 40 MB download, about 300 MB memory during transcription. Audio stays on this phone. The model is loaded only for transcription and then released.")
             .setNegativeButton("Cancel",null).setPositiveButton("Download") { _,_->work("Speech model installed") { VoiceTranscriber.download(this) { percent -> runOnUiThread { modelStatus?.text="Downloading speech model · $percent%" } } } }.showTracked()
     }
+    private fun consumeTranscripts(classify:Boolean=true) {
+        val engine=engine ?: return
+        val completed=mutableListOf<Pair<String,String>>()
+        val before=engine.state
+        try {
+            engine.state.messages.filter { it.attachment?.mime?.startsWith("audio/")==true && it.deleted==null }.forEach { message ->
+                val file=message.attachment!!.file
+                val key=vault.transcriptionKey(message.id,file)
+                val text=try { TranscriptionStore.read(this,message.id,file,key) } finally { key.fill(0) } ?: return@forEach
+                if(engine.applyTranscript(message.id,file,text) && classify) {
+                    configure(); suggest(engine.state.messages.first { it.id==message.id })
+                }
+                completed.add(message.id to file)
+            }
+            if(completed.isNotEmpty()) { vault.save(engine.state); markdownDirty=true }
+        } catch(error:Exception) { engine.state=before; throw error }
+        completed.forEach { (id,file)->TranscriptionStore.remove(this,id,file) }
+    }
     private fun transcribe(message: Message) {
+        if(message.transcribed) { expandedTranscripts.add(message.id); render(); return }
+        if(TranscriptionService.running(message.id)) { toast("Transcription continues in the background"); return }
+        if(TranscriptionService.active()) { toast("Finish the current transcription first"); return }
         if(!VoiceTranscriber.installed(this)) { speechSettings(); return }
         stopPlayback()
-        val generation=sessionGeneration
-        work("",false) {
-            val attachment=message.attachment ?: error("No recording")
-            val file=File(cacheDir,"play-transcribe-${UUID.randomUUID()}.m4a")
-            val text=try { vault.readMedia(attachment).use { input -> file.outputStream().use { input.copyTo(it) } }; VoiceTranscriber.transcribe(this,file) { !resumed || generation!=sessionGeneration } } finally { file.delete() }
-            runOnUiThread { if(resumed && generation==sessionGeneration) {
-                val reviewed=if(message.text.isNotBlank() && !message.transcribed)message.text+"\n\n"+text else text
-                val input=EditText(this).apply { setText(reviewed); maxLines=8; setTextColor(ink) }
-                dialog("Review transcript").setView(input).setNegativeButton("Cancel",null).setPositiveButton("Save & classify") { _,_->work("") {
-                    engine!!.edit(message.id,input.text.toString()); engine!!.update(message.id) { it.copy(transcribed=true) }; configure()
-                    suggest(engine!!.state.messages.first { it.id==message.id })
-                } }.showTracked()
-            } }
+        worker.execute {
+            var input:java.io.InputStream?=null; var key:ByteArray?=null
+            try {
+                consumeTranscripts()
+                val current=engine!!.state.messages.first { it.id==message.id && it.deleted==null }
+                if(current.transcribed) { runOnUiThread { if(resumed) { shown=projectPending(engine!!.state); expandedTranscripts.add(message.id); render() } }; return@execute }
+                val attachment=current.attachment ?: error("No recording")
+                input=vault.readMedia(attachment); key=vault.transcriptionKey(current.id,attachment.file)
+                val readyInput=input!!; val readyKey=key!!
+                runOnUiThread {
+                    if(!resumed || isFinishing) { readyInput.close(); readyKey.fill(0); return@runOnUiThread }
+                    try {
+                        val accepted=TranscriptionService.enqueue(applicationContext,current.id,attachment.file,readyInput,readyKey)
+                        if(accepted) { toast("Transcribing on this phone · you can leave the app"); render() }
+                    } catch(error:Exception) { tell(error.message ?: "Could not start transcription") }
+                }
+                input=null; key=null
+            } catch(error:Exception) { input?.close(); key?.fill(0); runOnUiThread { if(resumed)tell(error.message ?: "Cannot transcribe this recording") } }
         }
+    }
+    private fun transcriptionAction(message:Message):View {
+        val running=TranscriptionService.running(message.id)
+        return action(if(running)"Transcribing… · Cancel" else TranscriptionService.failure(message.id) ?: "Transcribe recording",{
+            if(running) { TranscriptionService.cancel(message.id); toast("Cancelling transcription") }
+            else transcribe(message)
+        },false)
+    }
+    private fun transcriptView(message:Message):View {
+        val content=column()
+        val expanded=message.id in expandedTranscripts
+        content.addView(row().apply {
+            addView(icon(if(expanded)"up" else "down",if(expanded)"Collapse transcript" else "Expand saved transcript") {
+                if(!expandedTranscripts.add(message.id))expandedTranscripts.remove(message.id)
+                render()
+            })
+            addView(label(if(expanded)"Transcript" else "Show transcript",13,green).apply {
+                setOnClickListener { if(!expandedTranscripts.add(message.id))expandedTranscripts.remove(message.id); render() }
+            },LinearLayout.LayoutParams(0,dp(48),1f))
+        })
+        if(expanded)content.addView(MessageText(this).apply {
+            textSize=16f; setTextColor(ink); setPadding(dp(4),0,dp(4),dp(8)); linkMenu=::linkActions
+            markdown.render(this,message.text,if(searchMode)query else "",::openLink)
+        })
+        return content
     }
     private fun duration(ms:Long)="${ms/60000}:${(ms/1000%60).toString().padStart(2,'0')}"
     private fun maybeTrain() {

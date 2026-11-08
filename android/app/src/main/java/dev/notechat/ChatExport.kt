@@ -15,13 +15,17 @@ object ChatExport {
             if (!markdown) {
                 val date=SimpleDateFormat("dd/MM/yyyy, HH:mm",Locale.ROOT).format(Date(m.created))
                 output.append("$date - ${m.sender?.replace('\n',' ') ?: "Me"}: ")
-                output.append(m.text)
+                output.append(m.searchText())
                 m.attachment?.let { a -> if(m.text.isNotEmpty())output.append('\n'); output.append("${a.name} (file attached)") }
                 output.append('\n')
                 continue
             }
             output.append(if (m.category == "todos") "- [${if (m.done) "x" else " "}] " else "- ")
             output.append(m.text.ifBlank { m.attachment?.name ?: "" })
+            m.tableCells.filterValues(String::isNotBlank).forEach { (id,value) ->
+                val column=categories.firstOrNull { it.id==m.category }?.layout?.columns?.firstOrNull { it.id==id }?.title ?: id
+                output.append("\n  **$column:** $value")
+            }
             m.attachment?.let { a ->
                 val name = mediaName(a)
                 output.append("\n  [${a.name.replace("]", "\\]")}]($name)")

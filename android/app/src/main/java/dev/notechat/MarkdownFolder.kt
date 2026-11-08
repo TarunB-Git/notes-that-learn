@@ -48,11 +48,23 @@ class MarkdownFolder(private val context: Context, tree: String) {
             if(state.markdown.pendingExternal[name]==source)state.markdown.pendingRendered[name] ?: source else source
         }
         val merged=MarkdownWorkspace.merge(state,effective)
-        engine.state=merged.state
+        val previous=state.messages.associateBy { it.id }
+        val resort=merged.state.messages.filter { message ->
+            message.chatId==null && message.trainable() && engine.state.preferences.classification &&
+                (message.id !in previous || previous[message.id]?.text!=message.text)
+        }.map { it.id }.toSet()
+        // Editor changes are suggestions, never implicit training approvals.
+        engine.state=merged.state.copy(messages=merged.state.messages.map { message ->
+            if(message.id in resort)message.copy(approved=false,manual=false) else message
+        })
         configure()
-        val known=state.messages.map { it.id }.toSet()
         engine.state=engine.state.copy(messages=engine.state.messages.map { message ->
-            if(message.id !in known && message.category==null && message.trainable() && engine.state.preferences.classification) { val suggestion=predict(message); message.copy(category=suggestion.category,reason=suggestion.reason) } else message
+            if(message.id in resort) {
+                val suggestion=predict(message)
+                message.copy(category=suggestion.category ?: message.category,reason=suggestion.reason.ifBlank { "Edited through Markdown. Confirm the category to teach it." },
+                    done=message.done && engine.state.isChecklist(message.copy(category=suggestion.category ?: message.category)),
+                    completedAt=message.completedAt.takeIf { (suggestion.category ?: message.category)=="todos" })
+            } else message
         })
         val output=filenames.map { (category,name) -> name to MarkdownWorkspace.render(engine.state,category?.takeUnless { it.startsWith("chat:") },chatId=category?.removePrefix("chat:")?.takeIf { category.startsWith("chat:") }) }.toMap()
         // Check every generated file before touching the last recoverable folder.

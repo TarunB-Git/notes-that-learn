@@ -11,6 +11,18 @@ class MarkdownWorkspaceTest {
         val files=mapOf("Thoughts.md" to MarkdownWorkspace.render(state,"thoughts"),"To-do.md" to MarkdownWorkspace.render(state,"todos"))
         return state.copy(markdown=MarkdownState("content://fixture/tree/root",files))
     }
+    @Test fun datesAreHiddenAndLegacyTimestampHeadingsStillRoundTrip() {
+        for(created in listOf(123456L,-123456L)) {
+            val message=Message(id="one",text="## 2026-10-23 14:00\n\nMy actual heading",category="thoughts",created=created)
+            val state=ChatState(categories,listOf(message))
+            val rendered=MarkdownWorkspace.render(state,"thoughts")
+            assertTrue(rendered.contains("<!-- notechat:created $created -->"))
+            assertEquals(message.text,MarkdownWorkspace.parse(rendered,state).entries.single().text)
+            val legacy=rendered.replace("<!-- notechat:created $created -->","## 2026-10-20 12:00")
+            assertEquals(message.text,MarkdownWorkspace.parse(legacy,state).entries.single().text)
+            assertEquals(message.created,FolderRecovery.reconstruct(mapOf("Thoughts.md" to rendered),categories).messages.single().created)
+        }
+    }
     @Test fun roundTripKeepsMultilineMarkdownAndDoesNotCreateApprovals() {
         val state=workspace()
         val doc=MarkdownWorkspace.parse(state.markdown.baseline.getValue("Thoughts.md"),state)

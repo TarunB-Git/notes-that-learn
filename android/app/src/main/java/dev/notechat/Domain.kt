@@ -12,8 +12,8 @@ const val TEXT_PREVIEW_CHARS = 6_000
 const val CLASSIFICATION_CHARS = 12_000
 
 data class Category(val id: String, val title: String, val description: String,
-                    val examples: List<String> = emptyList(), val pinned: Boolean = false, val icon: String? = null, val photo: Attachment? = null)
-data class Chat(val id: String, val title: String, val icon: String? = null, val photo: Attachment? = null)
+                    val examples: List<String> = emptyList(), val pinned: Boolean = false, val icon: String? = null, val photo: Attachment? = null, val layout: NotebookLayout = NotebookLayout())
+data class Chat(val id: String, val title: String, val icon: String? = null, val photo: Attachment? = null, val layout: NotebookLayout = NotebookLayout())
 data class QuizItem(val text: String, val prediction: String?, val answer: String? = null, val nanos: Long = 0)
 data class Quiz(val items: List<QuizItem>, val memoryKb: Int = 0)
 data class Attachment(val file: String, val name: String, val mime: String, val bytes: Long, val duration: Long = 0, val waveform: List<Int> = emptyList())
@@ -25,13 +25,13 @@ data class Message(
     val reason: String = "", val manual: Boolean = false, val sender: String? = null,
     val completedAt: Long? = null, val starArchiveAt: Long? = null, val transcribed: Boolean = false,
     val pinnedUntil: Long? = null, val chatId: String? = null, val remindAt: Long? = null,
-    val translation: String? = null, val extracted: Boolean = false
+    val translation: String? = null, val extracted: Boolean = false, val tableCells: Map<String,String> = emptyMap()
 )
 data class TrainingReport(val confirmed: Int, val heldOut: Int, val baseline: Double, val candidate: Double,
                           val adopted: Boolean, val timestamp: Long = System.currentTimeMillis())
 data class PersonalHead(val signature: String, val weights: List<List<Float>>, val bias: List<Float>)
 data class Preferences(val preserveImportDates: Boolean = false, val appearance: String = "system", val widgetWhenLocked: Boolean = false, val classification: Boolean = true, val frontend: String = "chat",
-                       val autoTranslate: Boolean = false, val targetLanguage: String = "en", val ocr: Boolean = false, val reminders: Boolean = false, val includePrivateChatsInInbox: Boolean = false, val colorTheme: String = "classic")
+                       val autoTranslate: Boolean = false, val targetLanguage: String = "en", val ocr: Boolean = false, val reminders: Boolean = false, val includePrivateChatsInInbox: Boolean = false, val colorTheme: String = "classic", val moveForwardedMessages: Boolean = false)
 data class MarkdownState(val tree: String? = null, val baseline: Map<String, String> = emptyMap(), val synced: Long = 0, val pendingExternal: Map<String,String> = emptyMap(), val pendingRendered: Map<String,String> = emptyMap())
 
 fun Message.completedArchived(now: Long = System.currentTimeMillis()) = done && completedAt != null && now - completedAt >= ARCHIVE_DELAY_MS
@@ -65,7 +65,7 @@ class ChatEngine(var state: ChatState) {
     }
     fun promoteChat(id: String, description: String) {
         val chat=state.chats.first { it.id==id }
-        addCategory(Category(chat.id,chat.title,description,icon=chat.icon,photo=chat.photo))
+        addCategory(Category(chat.id,chat.title,description,icon=chat.icon,photo=chat.photo,layout=chat.layout))
         state=state.copy(chats=state.chats.filterNot { it.id==id },messages=state.messages.map {
             if(it.chatId==id)it.copy(chatId=null,category=id,approved=true,manual=true,reason="Chat added to categories by you.") else it
         })
@@ -80,6 +80,15 @@ class ChatEngine(var state: ChatState) {
                 replyTo=null,rejected=emptySet(),done=false,completedAt=null,starred=false,starArchiveAt=null,pinnedUntil=null,remindAt=null,reason="Forwarded by you.")
         }
         require(copies.size==ids.size)
+        if(state.preferences.moveForwardedMessages) {
+            val originals=state.messages.filter { it.id in ids && it.visible() }
+            val moved=originals.zip(copies).map { (original,copy) -> copy.copy(id=original.id,created=original.created) }
+            val byId=moved.associateBy { it.id }
+            val invalidates=originals.any { it.approved }
+            state=state.copy(messages=state.messages.map { byId[it.id] ?: it },
+                model=if(invalidates)null else state.model, report=if(invalidates)null else state.report)
+            return moved
+        }
         state=state.copy(messages=state.messages+copies)
         return copies
     }
@@ -89,7 +98,7 @@ class ChatEngine(var state: ChatState) {
     fun update(id: String, action: (Message) -> Message) {
         require(state.messages.any { it.id == id }) { "Message no longer exists" }
         val old = state.messages.first { it.id == id }
-        val changed = action(old).let { if(it.category != "todos")it.copy(done=false,completedAt=null) else it }
+        val changed = action(old).let { if(!state.isChecklist(it))it.copy(done=false,completedAt=null) else it }
         val revoked = old.approved && (!changed.approved || old.text != changed.text || old.category != changed.category || changed.deleted != null)
         state = state.copy(messages = state.messages.map { if (it.id == id) changed else it },
             model = if (revoked) null else state.model, report = if (revoked) null else state.report)
@@ -116,8 +125,8 @@ class ChatEngine(var state: ChatState) {
             reason = if(keepCategory && it.trainable())"Edited · confirm category." else it.reason)
     }
     fun complete(id: String, done: Boolean, now: Long = System.currentTimeMillis()) = update(id) {
-        require(it.deleted == null && it.category == "todos")
-        it.copy(done = done, completedAt = if (done) now else null)
+        require(it.deleted == null && state.isChecklist(it))
+        it.copy(done = done, completedAt = if (done && it.chatId==null && it.category=="todos") now else null)
     }
     fun archiveStars(ids: Set<String>, now: Long = System.currentTimeMillis()) {
         ids.forEach { id -> update(id) { require(it.starred && it.deleted == null); it.copy(starArchiveAt = now) } }
@@ -128,7 +137,7 @@ class ChatEngine(var state: ChatState) {
     }
     fun split(id: String, parts: List<String>): List<Message> {
         val original = active().first { it.id == id }
-        require(original.attachment == null) { "Split text messages only" }
+        require(original.attachment == null && original.tableCells.values.all(String::isBlank)) { "Split plain notes only; keep table fields with their row" }
         require(parts.isNotEmpty() && parts.all { it.isNotBlank() && it.length <= MAX_MESSAGE_CHARS })
         val replacements = parts.mapIndexed { index, text -> original.copy(
             id = if (index == 0) id else UUID.randomUUID().toString(), text = text,
@@ -142,6 +151,7 @@ class ChatEngine(var state: ChatState) {
         val records = active().filter { it.id in ids }
         require(records.size >= 2 && records.size == ids.size) { "Select at least two active messages" }
         require(records.map { it.chatId }.distinct().size==1) { "Merge messages from the same chat" }
+        require(records.all { it.tableCells.values.all(String::isBlank) }) { "Merge plain notes only; table rows keep their own fields" }
         require(records.all { it.attachment == null }) { "Merge text messages only; attachments must stay separate" }
         require(records.sumOf { it.text.length.toLong() } + (records.size-1)*2L <= MAX_MESSAGE_CHARS) { "Merged text exceeds 1,000,000 characters" }
         val text = records.joinToString("\n\n") { it.text }
@@ -180,7 +190,7 @@ class ChatEngine(var state: ChatState) {
                 require(suggestion.category == null || state.categories.any { it.id == suggestion.category })
                 count++
                 pending.copy(category = suggestion.category, reason = suggestion.reason,
-                    done = original.done && suggestion.category == "todos",
+                    done = original.done && state.isChecklist(original.copy(category=suggestion.category)),
                     completedAt = original.completedAt.takeIf { suggestion.category == "todos" })
             }
         }
@@ -193,7 +203,7 @@ class ChatEngine(var state: ChatState) {
         state = state.copy(categories = state.categories.filterNot { it.id == id }, report = null, model = null, quiz = null,
             messages = state.messages.map { if (it.category == id)
                 it.copy(category = replacement, approved = replacement!=null && it.chatId==null, rejected = emptySet(), manual = true,reason=if(replacement==null)"Category removed." else "Category confirmed by you.",
-                    done = if(replacement=="todos")it.done else false, completedAt = if(replacement=="todos")it.completedAt else null)
+                    done = if(state.isChecklist(it.copy(category=replacement)))it.done else false, completedAt = if(replacement=="todos")it.completedAt else null)
                 else it.copy(rejected = it.rejected - id) })
     }
     fun addCategory(category: Category) {

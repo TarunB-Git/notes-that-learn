@@ -11,8 +11,14 @@ object FolderRecovery {
         files.forEach { (name,source) ->
             val id=MarkdownWorkspace.categoryId(source) ?: return@forEach
             val chat=MarkdownWorkspace.chatId(source)
-            if(chat!=null) { if(chats.none { it.id==chat })chats.add(Chat(chat,title(source,name))); return@forEach }
-            if(id!="unassigned" && categories.none { it.id==id })categories.add(Category(id,title(source,name),"Notes saved in ${title(source,name)}"))
+            val layout=MarkdownWorkspace.notebookLayout(source) ?: NotebookLayout()
+            if(chat!=null) { if(chats.none { it.id==chat })chats.add(Chat(chat,title(source,name),layout=layout)); return@forEach }
+            if(id!="unassigned" && categories.none { it.id==id })categories.add(Category(id,title(source,name),"Notes saved in ${title(source,name)}",layout=layout))
+        }
+        files.values.forEach { source ->
+            val id=MarkdownWorkspace.categoryId(source)
+            val layout=MarkdownWorkspace.notebookLayout(source)
+            if(id!=null && layout!=null) { val index=categories.indexOfFirst { it.id==id }; if(index>=0)categories[index]=categories[index].copy(layout=layout) }
         }
         val attachmentById=files.values.flatMap { source -> Regex("(?s)<!-- notechat:message ([A-Za-z0-9-]+) -->(.*?)<!-- /notechat -->").findAll(source).mapNotNull { block ->
             val filename=Regex("\\(_attachments/([^)]*)\\)").find(block.groupValues[2])?.groupValues?.get(1)
@@ -25,9 +31,10 @@ object FolderRecovery {
                 val marker=entry.id?.let { "<!-- notechat:message $it -->" }
                 val after=if(marker!=null)source.substringAfter(marker,"") else ""
                 val date=Regex("^\\s*## (\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2})").find(after)?.groupValues?.get(1)
-                val created=date?.let { runCatching { SimpleDateFormat("yyyy-MM-dd HH:mm",Locale.ROOT).apply { isLenient=false }.parse(it)?.time }.getOrNull() } ?: System.currentTimeMillis()
-                Message(id=entry.id ?: UUID.randomUUID().toString(),attachment=attachmentById[entry.id],text=entry.text,category=entry.category,chatId=entry.chatId,created=created,
-                    done=entry.done,completedAt=created.takeIf { entry.done },manual=entry.category!=null,reason="Recovered from Markdown. Confirm the category to teach it.")
+                val storedDate=Regex("^\\s*<!-- notechat:created (-?[0-9]+) -->").find(after)?.groupValues?.get(1)?.toLongOrNull()
+                val created=storedDate ?: date?.let { runCatching { SimpleDateFormat("yyyy-MM-dd HH:mm",Locale.ROOT).apply { isLenient=false }.parse(it)?.time }.getOrNull() } ?: System.currentTimeMillis()
+                Message(id=entry.id ?: UUID.randomUUID().toString(),attachment=attachmentById[entry.id],tableCells=entry.tableCells,text=entry.text,category=entry.category,chatId=entry.chatId,created=created,
+                    done=entry.done,completedAt=created.takeIf { entry.done && entry.category=="todos" && entry.chatId==null },manual=entry.category!=null,reason="Recovered from Markdown. Confirm the category to teach it.")
             }
         }
         // Old category files can retain a block after it was moved. Keep every distinct text,

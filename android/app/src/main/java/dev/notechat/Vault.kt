@@ -110,6 +110,11 @@ class Vault(private val context: Context, private val keyPrefix: String = "note-
     }
     fun hasMedia(attachment: Attachment) = attachment.file.matches(Regex("[a-f0-9-]{36}")) && File(media,attachment.file).exists()
     fun removeMedia(attachment: Attachment) { if (attachment.file.matches(Regex("[a-f0-9-]{36}"))) File(media, attachment.file).delete() }
+    @Synchronized fun transcriptionKey(id:String,attachment:String):ByteArray {
+        val mac=javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(dataKey ?: error("Workspace locked"),"HmacSHA256"))
+        return mac.doFinal("notechat-transcript:$id:$attachment".toByteArray())
+    }
     @Synchronized fun close() { dataKey?.fill(0); dataKey = null }
     private fun readWrapped() = synchronized(diskGuard) { wrapped.readFully() }
     private fun atomic(file: AtomicFile, bytes: ByteArray): Unit = synchronized(diskGuard) {

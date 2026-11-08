@@ -68,6 +68,29 @@ class MarkdownFolderTest {
         val engine=ChatEngine(ChatState(listOf(Category("thoughts","Thoughts","Observations")),listOf(Message(id="one",text="First note",category="thoughts")),markdown=MarkdownState(tree)))
         return Triple(provider,MarkdownFolder(context,tree),engine)
     }
+    @Test fun editorAdditionsAndEditsAreSortedWithoutTrainingAndPrivateChatsStayPrivate() {
+        val (provider,folder,engine)=fixture()
+        engine.state=engine.state.copy(categories=engine.state.categories+Category("todos","To-do","Actions"),chats=listOf(Chat("journal","Journal")))
+        engine.state=engine.state.copy(messages=engine.state.messages+Message(id="private",text="Private",chatId="journal"))
+        val predict: (Message)->Suggestion={ Suggestion("todos","An action to complete.") }
+        folder.sync(engine,{}, { error("No media") },predict=predict)
+        val thoughts=File(provider.root,"Note Chat/Thoughts.md")
+        thoughts.writeText(thoughts.readText().replace("First note","Remember to book tickets")+"\nBuy milk\n")
+        val privateName=MarkdownWorkspace.filename(engine.state,null,"journal")
+        File(provider.root,"Note Chat/$privateName").appendText("\nNew private note\n")
+        folder.sync(engine,{}, { error("No media") },configure={
+            assertFalse(engine.state.messages.first { it.text=="Buy milk" }.approved)
+        },predict=predict)
+        val notes=engine.state.messages.filter { it.chatId==null }
+        assertEquals(2,notes.size); assertTrue(notes.all { it.category=="todos" && !it.approved })
+        assertEquals("one",notes.first().id)
+        assertTrue(engine.state.messages.filter { it.chatId=="journal" }.all { it.category==null && !it.approved })
+        assertFalse(thoughts.readText().contains("Remember to book tickets"))
+        assertTrue(File(provider.root,"Note Chat/To-do.md").readText().contains("Buy milk"))
+        val stable=engine.state
+        folder.sync(engine,{}, { error("No media") },predict=predict)
+        assertEquals(stable,engine.state)
+    }
     @Test fun documentTreeSyncReadsEditorChangesAndResolvesLocalFileLinks() {
         val (provider,folder,engine)=fixture()
         folder.sync(engine,{}, { error("No attachments") })

@@ -38,6 +38,19 @@ class ChatUiTest {
         call(activity,"render"); layout(root)
         return activity to root
     }
+    @Test fun movedPrivateNotesDoNotRemainVisibleThroughOldPublicReplyPreviews() {
+        val (activity,root)=fixture()
+        val state=ChatState(categories,listOf(Message(id="private",text="SECRET PRIVATE TEXT",chatId="journal"),Message(text="Public reply",replyTo="private")),chats=listOf(Chat("journal","Journal")))
+        field(activity,"shown",state); field(activity,"engine",ChatEngine(state)); call(activity,"render"); layout(root)
+        assertFalse(descendants(root).filterIsInstance<TextView>().any { it.text.contains("SECRET PRIVATE TEXT") })
+    }
+    @Test fun typedLineBreaksStayOnSeparateLinesInMarkdownBubbles() {
+        val (activity,root)=fixture()
+        val state=ChatState(categories,listOf(Message(text="First line\nSecond **bold** line\nThird line")))
+        field(activity,"shown",state); field(activity,"engine",ChatEngine(state)); call(activity,"render"); layout(root)
+        val rendered=descendants(root).filterIsInstance<MessageText>().single().text.toString()
+        assertEquals("First line\nSecond bold line\nThird line",rendered)
+    }
     @Test fun optionalToolsMatchTheBuildEvenWithImportedGooglePreferences() {
         val (activity,root)=fixture("mods")
         val state=ChatState(categories,messages,preferences=Preferences(autoTranslate=true,ocr=true))
@@ -57,7 +70,7 @@ class ChatUiTest {
     }
     @Test fun settingsShowNativeSwitchesAndOnlyTheirControlsRequestChanges() {
         val (activity,root)=fixture("settings:display")
-        val inbox=descendants(root).filterIsInstance<com.google.android.material.switchmaterial.SwitchMaterial>().single()
+        val inbox=descendants(root).filterIsInstance<com.google.android.material.switchmaterial.SwitchMaterial>().single { it.contentDescription=="Include private chats in Inbox" }
         assertFalse(inbox.isChecked); assertEquals("Include private chats in Inbox",inbox.contentDescription.toString())
         capture(root,"display-switches")
         val form=LinearLayout(activity)
@@ -372,6 +385,37 @@ class ChatUiTest {
         task().check.performClick(); assertTrue(engine.state.messages.single().done)
         task().text.performLongClick(); assertEquals(1,selections)
         assertTrue(engine.state.messages.single().done)
+    }
+    @Test fun notebookLayoutIsAvailableDirectlyFromTheChatMenu() {
+        val (activity,_)=fixture("thoughts")
+        call(activity,"chatMenu")
+        val field=MainActivity::class.java.getDeclaredField("activeOverflow").apply { isAccessible=true }
+        val popup=field.get(activity) as android.widget.PopupMenu
+        assertTrue((0 until popup.menu.size()).any { popup.menu.getItem(it).title=="Layout" })
+        popup.dismiss()
+    }
+    @Test fun savedAudioTranscriptExpandsWithoutStartingAnotherJob() {
+        val (activity,root)=fixture()
+        val voice=messages.last().copy(text="Call the dentist on Friday",transcribed=true)
+        val state=ChatState(categories,listOf(voice))
+        field(activity,"shown",state); field(activity,"engine",ChatEngine(state)); call(activity,"render"); layout(root)
+        assertFalse(descendants(root).filterIsInstance<MessageText>().any { it.text.contains("Call the dentist") })
+        descendants(root).first { it.contentDescription=="Expand saved transcript" }.performClick(); layout(root)
+        assertTrue(descendants(root).filterIsInstance<MessageText>().any { it.text.contains("Call the dentist") })
+        assertFalse(TranscriptionService.active())
+        capture(root,"expanded-transcript")
+        descendants(root).first { it.contentDescription=="Collapse transcript" }.performClick(); layout(root)
+        assertFalse(descendants(root).filterIsInstance<MessageText>().any { it.text.contains("Call the dentist") })
+    }
+    @Test fun tableLayoutShowsWrappedRowsAndKeepsItsHeadersOnAPhone() {
+        val (activity,root)=fixture("thoughts")
+        val state=ChatState(categories.map { if(it.id=="thoughts")it.copy(layout=NotebookLayout("table")) else it },
+            listOf(Message(id="row",text="Book a venue",category="thoughts",tableCells=mapOf("details" to "Seats 40\nProjector needed"))))
+        field(activity,"shown",state); field(activity,"engine",ChatEngine(state)); call(activity,"render"); layout(root)
+        assertTrue(descendants(root).filterIsInstance<NotebookTable>().any())
+        assertTrue(descendants(root).filterIsInstance<TextView>().any { it.text=="Details" })
+        assertTrue(descendants(root).filterIsInstance<TextView>().any { it.text.contains("Seats 40") })
+        capture(root,"editable-table")
     }
     private fun capture(root:View,name:String="inbox") {
         org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(250)); layout(root)

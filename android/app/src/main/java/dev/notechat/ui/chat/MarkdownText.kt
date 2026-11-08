@@ -12,6 +12,7 @@ import io.noties.markwon.Markwon
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.MarkwonConfiguration
 import io.noties.markwon.core.MarkwonTheme
+import io.noties.markwon.SoftBreakAddsNewLinePlugin
 import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.ext.tasklist.TaskListPlugin
@@ -19,6 +20,7 @@ import io.noties.markwon.ext.tasklist.TaskListPlugin
 class MarkdownText(context:Context, open:(String)->Unit) {
     private val blue=if(UiColors.of(context).dark)Color.rgb(83,189,235) else Color.rgb(2,119,189)
     private val renderer=Markwon.builder(context)
+        .usePlugin(SoftBreakAddsNewLinePlugin.create())
         .usePlugin(StrikethroughPlugin.create()).usePlugin(TablePlugin.create(context)).usePlugin(TaskListPlugin.create(context))
         .usePlugin(object:AbstractMarkwonPlugin() {
             override fun configureTheme(builder:MarkwonTheme.Builder) { builder.linkColor(blue) }

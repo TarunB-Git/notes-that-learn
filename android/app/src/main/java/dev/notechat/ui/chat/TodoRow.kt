@@ -30,7 +30,7 @@ class TodoRow(context: Context, message: Message, colors: UiColors, markdown: Ma
         text.apply {
             immediateTap=true
             textSize = 17f; setTextColor(if (message.done) colors.muted else colors.ink)
-            markdown.render(this, message.text.ifBlank { message.attachment?.name.orEmpty() }, "") {}
+            markdown.render(this, if(message.transcribed && message.attachment?.mime?.startsWith("audio/")==true)message.attachment.name else message.text.ifBlank { message.attachment?.name.orEmpty() }, "") {}
             if (message.done) paintFlags = paintFlags or Paint.STRIKE_THRU_TEXT_FLAG
             interceptTap = { toggle(); true }
             setOnClickListener { toggle() }
