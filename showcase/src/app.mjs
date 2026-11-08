@@ -201,7 +201,7 @@ async function loadSamples() {
 }
 function clearLab() {
   $('#lab-outcome').classList.remove('confirmed');
-  $('#lab-outcome').replaceChildren(element('span', 'outcome-icon', '↳'), element('p', '', 'Save a label to see how example memory works.'));
+  $('#lab-outcome').replaceChildren(icon('arrow'), element('p', '', 'Save a label to see how example memory works.'));
 }
 async function resetDemo(resetNotes) {
   if (!ready) return;
@@ -244,7 +244,8 @@ $('#teach-note').addEventListener('click', async () => {
     updateMemory(count);
     const copy = element('p');
     copy.append(element('strong', '', `Now: ${categoryTitle(after.label)}. `), document.createTextNode('The label is saved. '));
-    const tryAgain = element('button', 'lab-try', 'Try this note in Inbox →');
+    const tryAgain = element('button', 'lab-try', 'Try this note in Inbox ');
+    tryAgain.append(icon('arrow'));
     tryAgain.addEventListener('click', () => {
       addNote(labText);
       $('#demo').scrollIntoView({ behavior: 'auto', block: 'center' });

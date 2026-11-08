@@ -1706,3 +1706,20 @@ dialog a {
   .download-options { gap:8px }
   .download-options .button { font-size:11px; padding:12px }
 }
+
+/* Keep the phone header focused on the product and portfolio. */
+.example-buttons svg { width:12px; height:12px; margin-left:3px; vertical-align:middle }
+.hero-actions { flex-wrap:wrap; row-gap:14px }
+@media (max-width:760px) {
+  .header-downloads { display:none }
+  .hero-note .hero-arrow-desktop { display:none }
+  .hero-note .hero-arrow-mobile { display:block; width:60px; height:88px }
+  .hero-actions { gap:14px 20px }
+}
+.flow-connector { width:20px; height:20px; flex-shrink:0 }
+.lab-outcome>svg { width:18px; height:18px; flex-shrink:0; color:#7f9068 }
+.lab-try { display:inline-flex; align-items:center; gap:5px }
+.lab-try svg { width:14px; height:14px }
+
+.hero-note .hero-arrow-mobile { display:none }
+@media (max-width:760px) { .hero-note .hero-arrow-mobile { display:block } }
