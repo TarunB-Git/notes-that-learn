@@ -29,14 +29,14 @@ class NavigationMotionTest {
         slide.capture()
         val next=TextView(context).apply { text="Settings" }
         root.addView(next,LinearLayout.LayoutParams(-1,-1)); slide.start(false)
-        assertTrue(next.translationX<0) // Enters from the left, moving right.
+        assertTrue(next.translationX>0) // Enters from the right, moving left.
         shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(120))
-        assertTrue(next.translationX<=0)
+        assertTrue(next.translationX>=0)
         slide.finish()
         assertEquals(0f,next.translationX); assertNull(old.parent)
         slide.capture()
         root.addView(old,LinearLayout.LayoutParams(-1,-1)); slide.start(true)
-        assertTrue(old.translationX>0) // Back enters from the right, moving left.
+        assertTrue(old.translationX<0) // Back enters from the left, moving right.
         slide.finish()
         assertEquals(0f,old.translationX); assertNull(next.parent)
     }

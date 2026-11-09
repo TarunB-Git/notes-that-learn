@@ -22,7 +22,7 @@ class ScreenSlide(private val root: LinearLayout) {
     }
     fun start(back: Boolean) {
         val old=outgoing ?: return
-        val distance=root.width.toFloat()*(if(back)-1 else 1)
+        val distance=root.width.toFloat()*(if(back)1 else -1)
         incoming=(0 until root.childCount).map { root.getChildAt(it) }
         val easing=PathInterpolator(.2f,0f,0f,1f)
         incoming.forEach { view -> view.translationX=-distance; view.animate().translationX(0f).setDuration(240).setInterpolator(easing).start() }
